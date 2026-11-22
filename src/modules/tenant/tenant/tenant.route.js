@@ -1,10 +1,10 @@
 const express = require('express');
-const { createTenant, getCurrentTenant } = require('./tenant.controller');
+const { getCurrentTenant } = require('./tenant.controller');
 const authenticate = require('../../../common/middlewares/authenticate');
 
 const router = express.Router();
 
-router.post('/', createTenant);
+// Companies are created only through the verified signup flow in /api/auth.
 router.get('/me', authenticate, getCurrentTenant);
 
 module.exports = router;

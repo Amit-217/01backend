@@ -30,7 +30,6 @@ const userSchema = new mongoose.Schema(
       required: true,
       trim: true,
       lowercase: true,
-      index: true,
     },
     password: {
       type: String,
@@ -77,6 +76,10 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    credentialVersion: {
+      type: Number,
+      default: 0,
+    },
     status: {
       type: String,
       enum: ['active', 'inactive'],
@@ -94,5 +97,7 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+userSchema.index({ email: 1 }, { unique: true, name: 'unique_login_email' });
 
 module.exports = mongoose.models.User || mongoose.model('User', userSchema);

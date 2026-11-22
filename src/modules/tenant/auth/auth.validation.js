@@ -36,6 +36,8 @@ const adminEmailValidation = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters').optional(),
   confirmPassword: z.string().min(8, 'Confirmation must be at least 8 characters').optional(),
   companyEmail: z.string().trim().email('Enter a valid company email').optional(),
+  tenantEmail: z.string().trim().email('Enter a valid company email').optional(),
+  onboardingToken: z.string().min(1).max(512).optional(),
 }).superRefine((data, ctx) => {
   if (!data.email && !data.adminEmail) {
     ctx.addIssue({
@@ -60,7 +62,7 @@ const loginValidation = z.object({
 });
 
 const refreshTokenValidation = z.object({
-  refreshToken: z.string().min(1, 'Refresh token is required'),
+  refreshToken: z.string().min(1, 'Refresh token is required').max(512),
 });
 
 const forgotPasswordValidation = z.object({

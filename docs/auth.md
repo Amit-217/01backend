@@ -1,8 +1,6 @@
-Read 
+# Tenant, admin, and employee flow
 
-## Complete tenant + admin + employee flow
-
-The actual logic is in `auth.service.js` and `user.service.js`. The route list is in `auth.route.js`.
+Start with the [auth routes](../src/modules/tenant/auth/auth.route.js) and [user routes](../src/modules/tenant/users/user.route.js). The signup, session, and employee rules live in [onboarding.service.js](../src/modules/tenant/auth/onboarding.service.js), [auth.service.js](../src/modules/tenant/auth/auth.service.js), [session.service.js](../src/modules/tenant/auth/session.service.js), and [user.service.js](../src/modules/tenant/users/user.service.js).
 
 ---
 
@@ -43,9 +41,7 @@ Body:
 }
 ```
 
-This marks:
-- `tenant.emailVerified = true`
-- tenant status becomes active
+The response includes `data.onboardingToken`. Keep it for admin setup. The company becomes active at finalization.
 
 ---
 
@@ -70,6 +66,7 @@ Body:
 {
   "companyEmail": "hello@acme.com",
   "email": "hello@acme.com",
+  "onboardingToken": "<company verification token>",
   "firstName": "Amit",
   "lastName": "Chandure",
   "password": "StrongPassword123",
@@ -104,7 +101,8 @@ Body:
 ```json
 {
   "companyEmail": "hello@acme.com",
-  "email": "admin@acme.com"
+  "email": "admin@acme.com",
+  "onboardingToken": "<company verification token>"
 }
 ```
 
@@ -123,6 +121,7 @@ Body:
 {
   "companyEmail": "hello@acme.com",
   "email": "admin@acme.com",
+  "onboardingToken": "<company verification token>",
   "otp": "123456"
 }
 ```
@@ -140,6 +139,7 @@ Body:
 {
   "companyEmail": "hello@acme.com",
   "email": "admin@acme.com",
+  "onboardingToken": "<company verification token>",
   "firstName": "Amit",
   "lastName": "Chandure",
   "password": "StrongPassword123",
@@ -169,8 +169,9 @@ Body:
 
 This returns:
 - accessToken
-- refreshToken
 - user info
+
+Native clients also receive a JSON refresh token. Browsers send `X-Viplora-Client: web` and receive the refresh token as an HttpOnly cookie. See the [API reference](API.md#refresh-token) for refresh requests.
 
 ---
 
@@ -264,6 +265,8 @@ The service checks this condition:
 
 That is why the “same email” flow is shorter than the “different email” flow.
 
-If you want, I can next give you:
-- a single Postman collection list for all these APIs, or
-- a sequence diagram of the entire onboarding flow.
+## Workspace access and platform staff
+
+Tenant sign-in, session refresh, and protected requests require an active company. Company suspension revokes current sessions. After restoration, users sign in again with their own credentials. Existing active company sessions use access version zero until the first status change.
+
+Platform staff sign in with their own password and authenticator on `/platform`. The console can send the tenant's existing reset code to a verified inbox and records that intervention internally. See [platform support operations](PLATFORM.md).

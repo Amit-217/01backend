@@ -19,14 +19,18 @@ const sendOtpEmail = async ({ email, otp, purpose, firstName = '' }) => {
     'If you did not request this, please ignore this email.',
   ].join('\n');
 
-  await configuredEmail.transporter.sendMail({
-    from: configuredEmail.from,
-    to: email,
-    subject,
-    text,
-  });
-
-  return true;
+  try {
+    await configuredEmail.transporter.sendMail({
+      from: configuredEmail.from,
+      to: email,
+      subject,
+      text,
+    });
+    return true;
+  } catch (error) {
+    console.error('OTP delivery failed:', error.code || error.name);
+    return false;
+  }
 };
 
 const sendEmailVerificationOTP = async ({ email, otp, purpose = 'email verification' }) =>

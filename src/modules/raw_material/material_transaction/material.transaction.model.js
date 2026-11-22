@@ -90,9 +90,40 @@ const materialTransactionSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    actorName: { type: String, select: false },
+    actorRole: { type: String, enum: ["admin", "employee"], select: false },
+    stockBefore: { type: Number, select: false },
+    stockAfter: { type: Number, select: false },
+    stockUnit: { type: String, select: false },
+    correctionOf: { type: mongoose.Schema.Types.ObjectId, ref: "MaterialTransaction", select: false },
+    idempotencyKey: {
+      type: String,
+      select: false,
+    },
+    requestFingerprint: {
+      type: String,
+      select: false,
+    },
+    reversalOf: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MaterialTransaction",
+    },
   },
   {
     timestamps: true,
+    toJSON: {
+      transform(_document, transaction) {
+        delete transaction.idempotencyKey;
+        delete transaction.requestFingerprint;
+        delete transaction.actorName;
+        delete transaction.actorRole;
+        delete transaction.stockBefore;
+        delete transaction.stockAfter;
+        delete transaction.stockUnit;
+        delete transaction.correctionOf;
+        return transaction;
+      },
+    },
   }
 );
 
@@ -107,7 +138,20 @@ materialTransactionSchema.index({
 materialTransactionSchema.index({
   tenantId: 1,
   date: -1,
+  _id: -1,
 });
+
+materialTransactionSchema.index({ tenantId: 1, createdBy: 1, date: -1, _id: -1 });
+
+materialTransactionSchema.index(
+  { tenantId: 1, createdBy: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }
+);
+
+materialTransactionSchema.index(
+  { tenantId: 1, reversalOf: 1 },
+  { unique: true, partialFilterExpression: { reversalOf: { $type: "objectId" } } }
+);
 
 const MaterialTransaction = mongoose.model(
   "MaterialTransaction",

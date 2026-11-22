@@ -24,6 +24,8 @@
     "otp": "123456"
   }
   ```
+- Keep `data.onboardingToken` from the company verification response for the next signup steps.
+- For employee verification, send `purpose: "employee_email_verification"` with the employee's email and OTP.
 
 ### Send admin email verification
 - Method: POST
@@ -32,7 +34,8 @@
   ```json
   {
     "email": "admin@acme.com",
-    "companyEmail": "hello@acme.com"
+    "companyEmail": "hello@acme.com",
+    "onboardingToken": "<company verification token>"
   }
   ```
 
@@ -44,6 +47,7 @@
   {
     "companyEmail": "hello@acme.com",
     "email": "admin@acme.com",
+    "onboardingToken": "<company verification token>",
     "otp": "123456"
   }
   ```
@@ -60,13 +64,14 @@
     "lastName": "Chandure",
     "password": "StrongPassword123",
     "confirmPassword": "StrongPassword123",
-    "otp": "123456"
+    "onboardingToken": "<company verification token>"
   }
   ```
 
 ### Finalize registration
 - Method: POST
 - Route: `/api/auth/finalize-registration`
+- Alias for `/api/auth/register-admin`. Both routes activate the tenant and create the admin account.
 - Body:
   ```json
   {
@@ -76,7 +81,7 @@
     "lastName": "Chandure",
     "password": "StrongPassword123",
     "confirmPassword": "StrongPassword123",
-    "otp": "123456"
+    "onboardingToken": "<company verification token>"
   }
   ```
 
@@ -100,11 +105,13 @@
     "refreshToken": "..."
   }
   ```
+- Browser login and refresh requests send `X-Viplora-Client: web` and include cookies. The API returns the access token and user and rotates the HttpOnly refresh cookie. Native clients use the JSON refresh token.
 
 ### Logout
 - Method: POST
 - Route: `/api/auth/logout`
 - Auth: required
+- Web clients send `X-Viplora-Client: web` and include cookies. Logout revokes the current Bearer session.
 
 ### Forgot password
 - Method: POST
@@ -150,6 +157,7 @@
     "purpose": "company_email_verification"
   }
   ```
+- Supported purposes are `company_email_verification`, `employee_email_verification`, and `password_reset`. Use `/api/auth/send-admin-email-verification` with the onboarding token to resend an admin code.
 
 ## Users
 
@@ -173,7 +181,7 @@
 - Method: GET
 - Route: `/api/users`
 - Auth: required
-- Scope: current tenant only
+- Scope is active employees in the current tenant.
 
 ### Get user by ID
 - Method: GET
@@ -186,6 +194,7 @@
 - Route: `/api/users/:id`
 - Auth: required
 - Admin required
+- Use the employee's `userId` for `:id`. An administrator can reactivate an employee by sending `{ "status": "active" }`.
 
 ### Deactivate user
 - Method: DELETE
@@ -200,18 +209,12 @@
 - Route: `/api/tenants/me`
 - Auth: required
 
-### Create tenant record
-- Method: POST
-- Route: `/api/tenants`
-- Body:
-  ```json
-  {
-    "name": "Acme Business",
-    "email": "hello@acme.com"
-  }
-  ```
+Companies are created only through the verified signup flow under `/api/auth`.
 
 ## Raw material endpoints
+
+Reads are available to admins and employees. Catalog writes (create, update, deactivate) require an admin.
+Deactivation is a soft delete; send `{ "isActive": true }` in a PATCH to reactivate a category, material, or vendor.
 
 ### List raw material categories
 - Method: GET
@@ -221,7 +224,7 @@
 ### Create raw material category
 - Method: POST
 - Route: `/api/v1/raw-material-categories`
-- Auth: required
+- Auth: admin
 - Body:
   ```json
   {
@@ -237,12 +240,13 @@
 ### Update raw material category
 - Method: PATCH
 - Route: `/api/v1/raw-material-categories/:id`
-- Auth: required
+- Auth: admin
+- Body: any of `name`, `isActive`
 
-### Delete raw material category
+### Deactivate raw material category
 - Method: DELETE
 - Route: `/api/v1/raw-material-categories/:id`
-- Auth: required
+- Auth: admin
 
 ### List raw materials
 - Method: GET
@@ -252,7 +256,8 @@
 ### Create raw material
 - Method: POST
 - Route: `/api/v1/raw-materials`
-- Auth: required
+- Auth: admin
+- The category must be active.
 - Body:
   ```json
   {
@@ -272,12 +277,15 @@
 ### Update raw material
 - Method: PATCH
 - Route: `/api/v1/raw-materials/:id`
-- Auth: required
+- Auth: admin
+- Body fields are `code`, `name`, `categoryId`, `unit`, `minimumStock`, and `isActive`. The validator strips `currentStock`. Use the ledger API to change stock.
+- Moving to a different category requires that category to be active.
+- `unit` cannot change once the material has stock movements (409).
 
-### Delete raw material
+### Deactivate raw material
 - Method: DELETE
 - Route: `/api/v1/raw-materials/:id`
-- Auth: required
+- Auth: admin
 
 ### List vendors
 - Method: GET
@@ -287,7 +295,7 @@
 ### Create vendor
 - Method: POST
 - Route: `/api/v1/vendors`
-- Auth: required
+- Auth: admin
 - Body:
   ```json
   {
@@ -307,22 +315,26 @@
 ### Update vendor
 - Method: PATCH
 - Route: `/api/v1/vendors/:id`
-- Auth: required
+- Auth: admin
+- Body: any of `name`, `phone`, `email`, `address`, `gstin`, `isActive`
 
-### Delete vendor
+### Deactivate vendor
 - Method: DELETE
 - Route: `/api/v1/vendors/:id`
-- Auth: required
+- Auth: admin
 
 ### List material transactions
 - Method: GET
 - Route: `/api/v1/material-transactions`
 - Auth: required
+- Query accepts an optional `rawMaterialId`. A nonempty value must be a valid ObjectId. An empty value uses the unfiltered list.
 
 ### Create material transaction
 - Method: POST
 - Route: `/api/v1/material-transactions`
-- Auth: required
+- Auth: required; `type: "ADJUSTMENT"` requires an admin
+- The optional `Idempotency-Key` uses 1–128 of `A-Z a-z 0-9 . _ : -` and is scoped to the tenant and acting user. A retry with the same key and payload returns the original movement. A different payload with that key returns 409.
+- Rules: `IN` uses direction `IN`; `CONSUMPTION` uses `OUT`; `ADJUSTMENT` may use either and requires a `reason`. `vendorId` and `rate` are accepted only on `IN`, and the vendor must be active. Stock cannot go below zero.
 - Body:
   ```json
   {
@@ -343,10 +355,98 @@
 - Route: `/api/v1/material-transactions/:id`
 - Auth: required
 
-### Delete material transaction
-- Method: DELETE
-- Route: `/api/v1/material-transactions/:id`
-- Auth: required
+### Reverse a material transaction
+- Method: POST
+- Route: `/api/v1/material-transactions/:id/reverse`
+- Auth: admin
+- The API writes a linked adjustment and retains the original. Repeating the request returns the existing reversal. A reversal cannot be reversed.
+
+Stock history is append-only: movements cannot be deleted. Use a reversal to correct a mistake.
+
+### Tenant transaction audit
+
+| Method | Route | Access |
+|---|---|---|
+| GET | `/api/v1/material-transactions/audit` | Tenant admin |
+| GET | `/api/v1/material-transactions/audit/actors` | Tenant admin |
+| GET | `/api/v1/material-transactions/audit/:id` | Tenant admin |
+
+The list returns `{ items, nextCursor }`. Filters are `rawMaterialId`, `actorId`, `type`, and inclusive UTC `from` and `to` dates in `YYYY-MM-DD` form. Use `limit` from 1 to 50 (default 25) and pass the returned cursor with the same filters to load older entries. The actors endpoint returns `{ id, label }` entries for the company's existing movements.
+
+Audit rows include the recorded actor and role when available, the movement and recording times, linked reversal and correction IDs, and stock before/after/unit on new entries. Older entries can omit the balance snapshot and use the actor's current name or stored ID as a fallback. Platform entries use actor ID `platform-support` and display name `Viplora Support`. Employees keep the existing ledger reads.
+
+## Finished Goods
+
+All endpoints use tenant authentication. Tenant admins manage the catalog. Employees can read active products and SKUs, record ordinary movements, and view tenant movement history.
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/v1/finished-goods/products` | List products |
+| GET | `/api/v1/finished-goods/products/:id` | Read a product |
+| POST | `/api/v1/finished-goods/products` | Create a product with `name` and `unit` |
+| PATCH | `/api/v1/finished-goods/products/:id` | Rename, archive, or restore with `name` or `isActive` |
+| GET | `/api/v1/finished-goods/skus` | List SKU balances, optionally filtered by `productId` |
+| GET | `/api/v1/finished-goods/skus/:id` | Read a SKU |
+| POST | `/api/v1/finished-goods/skus` | Create a SKU with `productId`, `code`, optional `size` and `colour` |
+| PATCH | `/api/v1/finished-goods/skus/:id` | Update `code`, `size`, `colour`, or `isActive` |
+| GET | `/api/v1/finished-goods/movements` | List ordinary finished-goods history |
+| GET | `/api/v1/finished-goods/movements/:id` | Read ordinary movement details |
+| GET | `/api/v1/finished-goods/movements/audit` | List detailed history as tenant admin |
+| GET | `/api/v1/finished-goods/movements/audit/actors` | List actor IDs and labels as tenant admin |
+| GET | `/api/v1/finished-goods/movements/audit/:id` | Read actor, balances, and links as tenant admin |
+| POST | `/api/v1/finished-goods/movements` | Record a movement with an `Idempotency-Key` |
+| POST | `/api/v1/finished-goods/movements/:id/reverse` | Append or retrieve a reversal as tenant admin. Supply `reason`. |
+
+SKU codes are normalized to uppercase and unique within a company, including archived codes. Each SKU inherits the product unit. Product units and SKU parent products are fixed after creation. A SKU must have zero stock to be archived. Archive a product after archiving its active SKUs. Restore the product first when bringing a SKU back. Admin reads include archived catalog entries.
+
+Send `skuId`, `type`, and `quantity` for a movement. Optional fields are `date` in `YYYY-MM-DD` UTC form, `reference`, and `notes`. Omit the date to record the current timestamp. `RECEIPT` and `RETURN` increase stock. `DISPATCH` decreases it. An admin can record `OPENING` with a reason before the first movement, or an `ADJUSTMENT` with `direction` and `reason`. Quantities range from 0.0001 to 1,000,000,000,000. Movement keys are scoped to tenant and actor, and conflicting reuse returns 409. Archive, opening-balance, and reversal conflicts also return 409. A stock decrease beyond the available balance returns 400.
+
+History returns `{ items, nextCursor }` with optional `productId`, `skuId`, `type`, inclusive UTC `from` and `to` dates, `cursor`, and `limit` (1–50, default 25). Admin audit adds `actorId` and includes the recorded actor and before-and-after balances. Movement rows snapshot the product name, SKU code, variant, and unit so later catalog changes preserve historical labels. The finished-goods ledger is independent of raw-material consumption.
+
+## Platform support
+
+All paths below use the `/api/platform` prefix. Sign-in takes `{ email, password, code }` and returns `{ staff, token, expiresAt }`. Use the token as a Bearer credential on platform routes. Both staff roles can read and sign out. The `operator` role can submit the interventions in the second table.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/auth/login` | Staff password and authenticator sign-in |
+| POST | `/auth/logout` | Revoke the current staff session |
+| GET | `/tenants` | List companies, optionally using `lookup` for exact ID or name |
+| GET | `/audit` | Platform-wide activity outside a selected company |
+| GET | `/tenants/:tenantId` | Company summary |
+| GET | `/tenants/:tenantId/users` | List company users and their access status |
+| GET | `/tenants/:tenantId/materials` | List materials and balances for repair selection |
+| GET | `/tenants/:tenantId/stock` | Transaction log with tenant audit filters and pagination |
+| GET | `/tenants/:tenantId/stock/actors` | List actors for the stock filter |
+| GET | `/tenants/:tenantId/stock/:id` | Transaction audit detail |
+| GET | `/tenants/:tenantId/finished-goods/products` | Finished product catalog |
+| GET | `/tenants/:tenantId/finished-goods/skus` | Finished balances, optionally filtered by `productId` |
+| GET | `/tenants/:tenantId/finished-goods/movements` | Finished-goods audit with the admin history filters |
+| GET | `/tenants/:tenantId/finished-goods/movements/actors` | Actor options for finished-goods audit |
+| GET | `/tenants/:tenantId/finished-goods/movements/:id` | Finished-goods movement detail |
+| GET | `/tenants/:tenantId/audit` | Company-specific platform events |
+| GET | `/tenants/:tenantId/changes` | Repair and recovery requests |
+
+Company, user, audit, and change lists support `cursor` and return `{ items, nextCursor }`. User lists include inactive users. Material and actor options are arrays.
+
+All interventions are POST requests under `/tenants/:tenantId`. Include `caseReference` and `reason` in every body.
+
+| Path suffix | Additional input and effect |
+|---|---|
+| `/stock/:id/reverse` | Append or retrieve the linked reversal |
+| `/stock/adjustment` | Supply `rawMaterialId`, `correctionOf`, `direction`, `quantity`, and the `Idempotency-Key` header |
+| `/finished-goods/movements/:id/reverse` | Append or retrieve a finished-goods reversal |
+| `/finished-goods/movements/adjustment` | Supply `skuId`, matching `correctionOf`, `direction`, `quantity`, and the `Idempotency-Key` header |
+| `/status` | Set workspace `status` to `inactive` or `active` |
+| `/users/:userId/status` | Set user `status` to `inactive` or `active` |
+| `/users/:userId/revoke-sessions` | Invalidate all sessions for the selected user |
+| `/users/:userId/request-recovery` | Send a password-reset code to the existing verified inbox |
+| `/changes/stock` | Preview 2–25 `lines` with distinct `rawMaterialId`, `direction`, and `quantity` |
+| `/changes/recovery` | Save the staged `snapshotReference` and `impactPreview` |
+| `/changes/:id/approve` | Approve a pending preview as a different operator. Stock approval applies the batch. |
+| `/changes/:id/complete` | Record approved recovery `outcome` (`completed` or `failed`) with `evidenceReference` |
+
+Invalid inputs return 400, unauthorized staff actions return 403, targets outside the selected company return 404, and stale repair previews return 409. See [platform support operations](PLATFORM.md) for provisioning and the backup recovery runbook.
 
 ## Security conventions
 - OTPs are purpose-specific
@@ -359,4 +459,4 @@
 - Raw material stock changes must be performed only through material transaction APIs to keep inventory history reliable
 
 ## Swagger
-The application also exposes Swagger docs at `/api-docs` when the app is running.
+The application serves Swagger UI at `/api-docs`. Check [app.js](../src/app.js) and the mounted routers for active endpoints.

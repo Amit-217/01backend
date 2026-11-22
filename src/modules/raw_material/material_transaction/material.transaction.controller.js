@@ -4,14 +4,17 @@ const {
   listMaterialTransactions,
   createMaterialTransaction,
   getMaterialTransactionById,
-  deleteMaterialTransactionById,
+  reverseMaterialTransactionById,
 } = require('./material.transaction.service');
+const { tenantActorFields, listMovementAudit, getMovementAudit, listMovementActors } = require('./movement.audit');
 
 const createTransaction = asyncHandler(async (req, res) => {
   const transaction = await createMaterialTransaction({
+    ...req.body,
     tenantId: req.user.tenantId,
     createdBy: req.user.userId,
-    ...req.body,
+    ...tenantActorFields(req.user),
+    idempotencyKey: req.get('Idempotency-Key'),
   });
 
   return sendSuccess(res, 201, 'Material transaction created successfully.', transaction);
@@ -32,19 +35,32 @@ const getTransaction = asyncHandler(async (req, res) => {
   return sendSuccess(res, 200, 'Material transaction retrieved successfully.', transaction);
 });
 
-const deleteTransaction = asyncHandler(async (req, res) => {
-  const transaction = await deleteMaterialTransactionById(req.params.id, req.user.tenantId);
-
-  if (!transaction) {
-    return sendError(res, 404, 'Transaction not found.');
-  }
-
-  return sendSuccess(res, 200, 'Material transaction deleted successfully.', transaction);
+const reverseTransaction = asyncHandler(async (req, res) => {
+  const transaction = await reverseMaterialTransactionById(
+    req.params.id,
+    req.user.tenantId,
+    req.user.userId,
+    tenantActorFields(req.user),
+  );
+  if (!transaction) return sendError(res, 404, 'Transaction not found.');
+  return sendSuccess(res, 201, 'Stock movement reversed.', transaction);
 });
+
+const listAudit = asyncHandler(async (req, res) =>
+  sendSuccess(res, 200, 'Movement audit retrieved.', await listMovementAudit(req.user.tenantId, req.query)));
+
+const getAudit = asyncHandler(async (req, res) =>
+  sendSuccess(res, 200, 'Movement detail retrieved.', await getMovementAudit(req.user.tenantId, req.params.id)));
+
+const listActors = asyncHandler(async (req, res) =>
+  sendSuccess(res, 200, 'Movement actors retrieved.', await listMovementActors(req.user.tenantId)));
 
 module.exports = {
   createTransaction,
   listTransactions,
   getTransaction,
-  deleteTransaction,
+  reverseTransaction,
+  listAudit,
+  getAudit,
+  listActors,
 };

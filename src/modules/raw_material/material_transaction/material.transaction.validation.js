@@ -14,9 +14,6 @@ const createMaterialTransactionValidation = z.object({
   notes: z.string().trim().max(500, 'Notes are too long.').optional(),
 });
 
-const updateMaterialTransactionValidation = createMaterialTransactionValidation.partial();
-
 module.exports = {
   createMaterialTransactionValidation,
-  updateMaterialTransactionValidation,
 };

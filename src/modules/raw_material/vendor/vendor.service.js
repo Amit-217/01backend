@@ -60,8 +60,10 @@ const updateVendorById = async (id, tenantId, payload) => {
   if (payload.phone !== undefined) vendor.phone = payload.phone ? String(payload.phone).trim() : undefined;
   if (payload.email !== undefined) {
     const email = payload.email ? String(payload.email).trim().toLowerCase() : undefined;
-    const duplicateEmail = await Vendor.findOne({ tenantId, email, _id: { $ne: vendor._id } });
-    if (duplicateEmail) throw new AppError(409, 'A vendor with this email already exists in this tenant.');
+    if (email) {
+      const duplicateEmail = await Vendor.findOne({ tenantId, email, _id: { $ne: vendor._id } });
+      if (duplicateEmail) throw new AppError(409, 'A vendor with this email already exists in this tenant.');
+    }
     vendor.email = email;
   }
   if (payload.address !== undefined) vendor.address = payload.address ? String(payload.address).trim() : undefined;

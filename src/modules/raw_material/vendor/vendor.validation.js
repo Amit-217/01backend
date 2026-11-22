@@ -8,7 +8,9 @@ const createVendorValidation = z.object({
   gstin: z.string().trim().max(30, 'GSTIN is too long.').optional(),
 });
 
-const updateVendorValidation = createVendorValidation.partial();
+const updateVendorValidation = createVendorValidation.partial().extend({
+  isActive: z.boolean().optional(),
+});
 
 module.exports = {
   createVendorValidation,

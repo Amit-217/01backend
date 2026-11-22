@@ -1,6 +1,7 @@
 const { asyncHandler } = require('../../../common/utils/errors');
 const { sendSuccess, sendError } = require('../../../common/utils/response');
 const authService = require('./auth.service');
+const { formatSessionResponse, clearWebSession, getWebRefresh } = require('./auth.web');
 
 const register = asyncHandler(async (req, res) => {
   const result = await authService.registerTenant(req.body);
@@ -29,17 +30,20 @@ const registerAdmin = asyncHandler(async (req, res) => {
 
 const login = asyncHandler(async (req, res) => {
   const result = await authService.loginUser(req.body);
-  return sendSuccess(res, 200, 'Login successful.', result);
+  return sendSuccess(res, 200, 'Login successful.', formatSessionResponse(req, res, result));
 });
 
 const refreshToken = asyncHandler(async (req, res) => {
   const result = await authService.refreshUserToken(req.body);
-  return sendSuccess(res, 200, 'Token refreshed successfully.', result);
+  return sendSuccess(res, 200, 'Token refreshed successfully.', formatSessionResponse(req, res, result));
 });
 
 const logout = asyncHandler(async (req, res) => {
-  const result = await authService.logoutUser(req.user.userId);
-  return sendSuccess(res, 200, result.message, result);
+  const { message, clearRefreshCookie } = await authService.logoutUser(
+    req.user.sessionId, req.user.userId, getWebRefresh(req),
+  );
+  if (clearRefreshCookie) clearWebSession(req, res);
+  return sendSuccess(res, 200, message, { message });
 });
 
 const forgotPassword = asyncHandler(async (req, res) => {

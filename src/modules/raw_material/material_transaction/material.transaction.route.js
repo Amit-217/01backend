@@ -1,34 +1,31 @@
 const express = require('express');
 const authenticate = require('../../../common/middlewares/authenticate');
+const authorizeAdmin = require('../../../common/middlewares/authorizeAdmin');
+const validate = require('../../../common/middlewares/validate');
 const {
   createTransaction,
   listTransactions,
   getTransaction,
-  deleteTransaction,
+  reverseTransaction,
+  listAudit,
+  getAudit,
+  listActors,
 } = require('./material.transaction.controller');
-const {
-  createMaterialTransactionValidation,
-  updateMaterialTransactionValidation,
-} = require('./material.transaction.validation');
+const { createMaterialTransactionValidation } = require('./material.transaction.validation');
 
 const router = express.Router();
 
-const validate = (schema) => (req, res, next) => {
-  const result = schema.safeParse(req.body);
-
-  if (!result.success) {
-    const message = result.error.issues[0]?.message || 'Validation failed';
-    return res.status(400).json({ success: false, message });
-  }
-
-  req.body = result.data;
-  return next();
-};
-
 router.use(authenticate);
 router.get('/', listTransactions);
-router.post('/', validate(createMaterialTransactionValidation), createTransaction);
+router.post('/', validate(createMaterialTransactionValidation), (req, res, next) => {
+  if (req.body.type === 'ADJUSTMENT') return authorizeAdmin(req, res, next);
+  return next();
+}, createTransaction);
+router.get('/audit', authorizeAdmin, listAudit);
+router.get('/audit/actors', authorizeAdmin, listActors);
+router.get('/audit/:id', authorizeAdmin, getAudit);
 router.get('/:id', getTransaction);
-router.delete('/:id', deleteTransaction);
+// Stock history is append-only: corrections are made with a reversal, never a delete.
+router.post('/:id/reverse', authorizeAdmin, reverseTransaction);
 
 module.exports = router;

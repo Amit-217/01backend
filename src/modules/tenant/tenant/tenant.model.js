@@ -47,6 +47,7 @@ const tenantSchema = new mongoose.Schema(
       enum: ['active', 'inactive', 'pending'],
       default: 'pending',
     },
+    accessVersion: { type: Number, default: 0 },
     adminEmail: {
       type: String,
       default: null,
@@ -57,6 +58,14 @@ const tenantSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    companyOtpSentAt: { type: Date, default: null },
+    adminOtpSentAt: { type: Date, default: null },
+    adminOtpHash: { type: String, default: null, select: false },
+    adminOtpExpiresAt: { type: Date, default: null },
+    adminOtpAttempts: { type: Number, default: 0 },
+    onboardingTokenHash: { type: String, default: null, select: false },
+    onboardingTokenExpiresAt: { type: Date, default: null },
+    onboardingCompletedAt: { type: Date, default: null },
   },
   {
     timestamps: true,

@@ -1,6 +1,14 @@
 const RawMaterial = require('./raw.material.model');
 const RawMaterialCategory = require('../category/category.model');
+const MaterialTransaction = require('../material_transaction/material.transaction.model');
 const { AppError } = require('../../../common/utils/errors');
+
+const findActiveCategory = async (categoryId, tenantId) => {
+  const category = await RawMaterialCategory.findOne({ _id: categoryId, tenantId });
+  if (!category) throw new AppError(404, 'Category not found in this tenant.');
+  if (category.isActive === false) throw new AppError(400, 'Category is inactive.');
+  return category;
+};
 
 const listRawMaterials = async (tenantId) => {
   return RawMaterial.find({ tenantId }).populate('categoryId', 'name').sort({ createdAt: -1 });
@@ -18,10 +26,7 @@ const createRawMaterial = async ({ tenantId, code, name, categoryId, unit, minim
     throw new AppError(400, 'Material name is required.');
   }
 
-  const category = await RawMaterialCategory.findOne({ _id: categoryId, tenantId });
-  if (!category) {
-    throw new AppError(404, 'Category not found in this tenant.');
-  }
+  await findActiveCategory(categoryId, tenantId);
 
   const existingMaterial = await RawMaterial.findOne({ tenantId, code: materialCode });
   if (existingMaterial) {
@@ -51,11 +56,9 @@ const updateRawMaterialById = async (id, tenantId, payload) => {
     return null;
   }
 
-  if (payload.categoryId) {
-    const category = await RawMaterialCategory.findOne({ _id: payload.categoryId, tenantId });
-    if (!category) {
-      throw new AppError(404, 'Category not found in this tenant.');
-    }
+  // Keeping an existing (possibly inactive) category is allowed; moving to another one requires it to be active.
+  if (payload.categoryId && String(payload.categoryId) !== String(material.categoryId)) {
+    await findActiveCategory(payload.categoryId, tenantId);
     material.categoryId = payload.categoryId;
   }
 
@@ -74,7 +77,13 @@ const updateRawMaterialById = async (id, tenantId, payload) => {
     material.name = name;
   }
 
-  if (payload.unit !== undefined) {
+  if (payload.unit !== undefined && payload.unit !== material.unit) {
+    // Stock and ledger quantities are stored in the material's unit; changing it would silently rescale history.
+    const hasHistory = material.currentStock > 0
+      || await MaterialTransaction.exists({ tenantId, rawMaterialId: material._id });
+    if (hasHistory) {
+      throw new AppError(409, 'The unit cannot change after stock movements are recorded for this material.');
+    }
     material.unit = payload.unit;
   }
 

@@ -1,5 +1,7 @@
 const express = require('express');
 const authenticate = require('../../../common/middlewares/authenticate');
+const authorizeAdmin = require('../../../common/middlewares/authorizeAdmin');
+const validate = require('../../../common/middlewares/validate');
 const {
   createCategory,
   listCategory,
@@ -14,26 +16,11 @@ const {
 
 const router = express.Router();
 
-const validate = (schema) => (req, res, next) => {
-  const result = schema.safeParse(req.body);
-
-  if (!result.success) {
-    const message = result.error.issues[0]?.message || 'Validation failed';
-    return res.status(400).json({
-      success: false,
-      message,
-    });
-  }
-
-  req.body = result.data;
-  return next();
-};
-
 router.use(authenticate);
 router.get('/', listCategory);
-router.post('/', validate(createCategoryValidation), createCategory);
+router.post('/', authorizeAdmin, validate(createCategoryValidation), createCategory);
 router.get('/:id', getCategory);
-router.patch('/:id', validate(updateCategoryValidation), updateCategory);
-router.delete('/:id', deleteCategory);
+router.patch('/:id', authorizeAdmin, validate(updateCategoryValidation), updateCategory);
+router.delete('/:id', authorizeAdmin, deleteCategory);
 
 module.exports = router;

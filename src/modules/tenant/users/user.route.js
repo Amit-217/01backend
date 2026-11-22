@@ -1,14 +1,29 @@
 const express = require('express');
+const { z } = require('zod');
 const { createUser, listUsers, getUserById, updateUser, deleteUser } = require('./user.controller');
+const { employeeCreateValidation } = require('./user.validation');
 const authenticate = require('../../../common/middlewares/authenticate');
 const authorizeAdmin = require('../../../common/middlewares/authorizeAdmin');
+const validate = require('../../../common/middlewares/validate');
 
 const router = express.Router();
+const employeeFields = employeeCreateValidation.shape;
+const employeeUpdateValidation = z.object({
+  firstName: employeeFields.firstName.optional(),
+  lastName: employeeFields.lastName,
+  email: employeeFields.email.optional(),
+  password: employeeFields.password.optional(),
+  confirmPassword: employeeFields.confirmPassword.optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+}).refine(({ password, confirmPassword }) => password === confirmPassword, {
+  message: 'Password confirmation does not match.',
+  path: ['confirmPassword'],
+});
 
-router.post('/', authenticate, authorizeAdmin, createUser);
+router.post('/', authenticate, authorizeAdmin, validate(employeeCreateValidation), createUser);
 router.get('/', authenticate, listUsers);
 router.get('/:id', authenticate, getUserById);
-router.patch('/:id', authenticate, authorizeAdmin, updateUser);
+router.patch('/:id', authenticate, authorizeAdmin, validate(employeeUpdateValidation), updateUser);
 router.delete('/:id', authenticate, authorizeAdmin, deleteUser);
 
 module.exports = router;
