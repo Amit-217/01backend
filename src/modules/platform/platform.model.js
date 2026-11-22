@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
+const { lockFields } = require('../../common/utils/loginLock');
 
 const staffSchema = new Schema({
   name: { type: String, required: true },
@@ -9,6 +10,7 @@ const staffSchema = new Schema({
   passwordHash: { type: String, required: true, select: false },
   totpSecret: { type: String, required: true, select: false },
   lastTotpStep: { type: Number, default: -1, select: false },
+  ...lockFields,
 }, { timestamps: true });
 
 const sessionSchema = new Schema({

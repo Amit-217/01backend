@@ -96,6 +96,8 @@
   }
   ```
 
+- **Per-account lock:** 10 failed sign-ins for the same account within 10 minutes lock it for 10 minutes, whichever devices or IP addresses send them. During the lock, every sign-in returns 429, even with the right password, with a message that says how many minutes remain and suggests a password reset. A successful sign-in, a completed password reset, or an employee setting their password clears the count and any lock. The per-IP rate limit still applies on top.
+
 ### Refresh token
 - Method: POST
 - Route: `/api/auth/refresh-token`

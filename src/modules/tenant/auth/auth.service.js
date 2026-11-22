@@ -13,6 +13,7 @@ const { sendEmailVerificationOTP, sendPasswordResetOTP } = require('./auth.util'
 const { OTP_PURPOSES } = require('./auth.constant');
 const onboarding = require('./onboarding.service');
 const { activeTenant, createSession, rotateSession, revokeSession, revokeUserSessions } = require('./session.service');
+const { LOCK_MS, assertNotLocked, recordFailure, clearFailures, clearedLock } = require('../../../common/utils/loginLock');
 
 const OTP_TTL = Number(process.env.OTP_EXPIRY || 10) * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -89,6 +90,7 @@ const verifyTenantEmail = async ({
   if (newPassword) {
     user.password = await hashPassword(newPassword);
     user.passwordSetupRequired = false;
+    Object.assign(user, clearedLock);
     user.$inc('credentialVersion', 1);
   }
   await user.save();
@@ -110,9 +112,13 @@ const sessionResponse = ({ user, sessionId, refreshToken }) => ({
 
 const loginUser = async ({ email, password }) => {
   const user = await User.findOne({ email: normalizeEmail(email) });
+  // Check the lock before the password so guesses during a lock never count or succeed.
+  assertNotLocked(user);
   if (!user || !(await comparePassword(password, user.password))) {
+    if (user && await recordFailure(User, user)) assertNotLocked({ lockedUntil: new Date(Date.now() + LOCK_MS) });
     throw new AppError(401, 'Invalid email or password.');
   }
+  await clearFailures(User, user);
   if (user.status !== 'active') throw new AppError(403, 'Account is inactive.');
   if (!user.emailVerified) throw new AppError(403, 'Email is not verified.');
   const tenant = await activeTenant(user.tenantId);
@@ -183,6 +189,7 @@ const resetPassword = async ({ email, otp, newPassword, confirmPassword }) => {
     {
       $inc: { credentialVersion: 1 },
       $set: {
+        ...clearedLock,
         password, refreshTokenHash: null, refreshTokenExpiresAt: null,
         otp: null, otpPurpose: null, otpExpiresAt: null, otpAttempts: 0,
         passwordResetVerified: false, passwordResetVerifiedAt: null,

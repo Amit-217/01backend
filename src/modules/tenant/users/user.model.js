@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { lockFields } = require('../../../common/utils/loginLock');
 
 const userSchema = new mongoose.Schema(
   {
@@ -70,6 +71,8 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Per-account sign-in lock (see common/utils/loginLock.js).
+    ...lockFields,
     passwordResetVerified: {
       type: Boolean,
       default: false,

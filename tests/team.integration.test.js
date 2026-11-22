@@ -118,6 +118,20 @@ test('team invitations, admin-only reads, reactivation, admin roles, and code co
     await auth('login', { email: staffEmail, password: staffPassword }).expect(403);
     await owner.patch('/api/users/' + staffId, { status: 'active' }).expect(200);
     await auth('login', { email: staffEmail, password: staffPassword }).expect(200);
+
+    // Per-account lock: the tenth wrong password locks sign-in, even with the right password; a reset unlocks.
+    for (let attempt = 1; attempt < 10; attempt += 1) {
+      await auth('login', { email: staffEmail, password: 'WrongPassword1324!' }).expect(401);
+    }
+    await auth('login', { email: staffEmail, password: 'WrongPassword1324!' }).expect(429);
+    await auth('login', { email: staffEmail, password: staffPassword }).expect(429);
+    await User.updateOne({ email: staffEmail }, { $set: { otpSentAt: null } });
+    await auth('forgot-password', { email: staffEmail }).expect(200);
+    const unlockCode = getCode(staffEmail, 'password reset');
+    await auth('verify-reset-otp', { email: staffEmail, otp: unlockCode }).expect(200);
+    const unlocked = 'AfterLockout1324!';
+    await auth('reset-password', { email: staffEmail, otp: unlockCode, newPassword: unlocked, confirmPassword: unlocked }).expect(200);
+    await auth('login', { email: staffEmail, password: unlocked }).expect(200);
   } finally {
     try {
       if (mongoose.connection.readyState === 1 && mongoose.connection.name === dbName) {
