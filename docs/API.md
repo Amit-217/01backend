@@ -25,7 +25,7 @@
   }
   ```
 - Keep `data.onboardingToken` from the company verification response for the next signup steps.
-- For employee verification, send `purpose: "employee_email_verification"` with the employee's email and OTP.
+- For employee verification, send `purpose: "employee_email_verification"` with the employee's email and OTP, plus `newPassword` and `confirmPassword`. The password is required for employees who were invited without one (`passwordSetupRequired`). It is optional otherwise and replaces the current password when sent. The code stays valid if the request fails only because the password is missing.
 
 ### Send admin email verification
 - Method: POST
@@ -158,6 +158,11 @@
   }
   ```
 - Supported purposes are `company_email_verification`, `employee_email_verification`, and `password_reset`. Use `/api/auth/send-admin-email-verification` with the onboarding token to resend an admin code.
+- Codes have a 60-second resend cooldown per account. A company resend inside the cooldown returns 429. An employee or password-reset resend returns the usual generic message and reuses the live code, so the response does not reveal whether the account exists. `forgot-password` follows the same rule.
+- After `verify-reset-otp` succeeds, the code stays valid for another full OTP window so the user can choose the new password.
+
+### Password rule
+- Every password a user chooses must be 8 characters to 72 bytes. bcrypt ignores bytes past 72, so the API rejects longer passwords instead of silently truncating them.
 
 ## Users
 
@@ -171,22 +176,25 @@
   {
     "firstName": "Amit",
     "lastName": "Chandure",
-    "email": "employee@acme.com",
-    "password": "StrongPassword123",
-    "confirmPassword": "StrongPassword123"
+    "email": "employee@acme.com"
   }
   ```
+- Without `password`, the employee is **invited**. They receive a verification code and choose their own password through `/api/auth/verify-email`. The legacy `password` and `confirmPassword` fields still work.
+- The response includes `emailSent`.
+- Reusing the email of a deactivated employee in the same company returns 409 with a message to reactivate them instead.
 
 ### List users
 - Method: GET
-- Route: `/api/users`
+- Route: `/api/users?status=active|inactive`
 - Auth: required
-- Scope is active employees in the current tenant.
+- Admin required
+- Returns the current tenant's administrators and employees with the given status (default `active`), administrators first.
 
 ### Get user by ID
 - Method: GET
 - Route: `/api/users/:id`
 - Auth: required
+- Admin required
 - Scope: current tenant only
 
 ### Update user
@@ -194,13 +202,21 @@
 - Route: `/api/users/:id`
 - Auth: required
 - Admin required
-- Use the employee's `userId` for `:id`. An administrator can reactivate an employee by sending `{ "status": "active" }`.
+- Use the user's `userId` for `:id`.
+- Reactivate an employee with `{ "status": "active" }`.
+- Promote or demote with `{ "role": "admin" | "employee" }`.
+- Rules:
+  - Nobody can change their own role or status.
+  - Only active employees with a verified email can be promoted.
+  - Another administrator only accepts `{ "role": "employee" }`. Remove admin rights before any other change.
+  - A role change signs that person out once.
 
 ### Deactivate user
 - Method: DELETE
 - Route: `/api/users/:id`
 - Auth: required
 - Admin required
+- Employees only. Remove admin rights first.
 
 ## Tenant endpoints
 
@@ -439,6 +455,7 @@ All interventions are POST requests under `/tenants/:tenantId`. Include `caseRef
 | `/finished-goods/movements/adjustment` | Supply `skuId`, matching `correctionOf`, `direction`, `quantity`, and the `Idempotency-Key` header |
 | `/status` | Set workspace `status` to `inactive` or `active` |
 | `/users/:userId/status` | Set user `status` to `inactive` or `active` |
+| `/users/:userId/role` | Set user `role` to `admin` or `employee` (restores admin access for a locked-out company). Promoting needs an active user with a verified email. Removing the last active administrator returns 409. Revokes that user's sessions |
 | `/users/:userId/revoke-sessions` | Invalidate all sessions for the selected user |
 | `/users/:userId/request-recovery` | Send a password-reset code to the existing verified inbox |
 | `/changes/stock` | Preview 2–25 `lines` with distinct `rawMaterialId`, `direction`, and `quantity` |

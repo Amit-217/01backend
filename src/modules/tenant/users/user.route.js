@@ -12,17 +12,19 @@ const employeeUpdateValidation = z.object({
   firstName: employeeFields.firstName.optional(),
   lastName: employeeFields.lastName,
   email: employeeFields.email.optional(),
-  password: employeeFields.password.optional(),
-  confirmPassword: employeeFields.confirmPassword.optional(),
+  password: employeeFields.password,
+  confirmPassword: employeeFields.confirmPassword,
   status: z.enum(['active', 'inactive']).optional(),
+  role: z.enum(['admin', 'employee']).optional(),
 }).refine(({ password, confirmPassword }) => password === confirmPassword, {
   message: 'Password confirmation does not match.',
   path: ['confirmPassword'],
 });
 
+// Team management is admin-only, including reads: employees must not list colleagues' contact details.
 router.post('/', authenticate, authorizeAdmin, validate(employeeCreateValidation), createUser);
-router.get('/', authenticate, listUsers);
-router.get('/:id', authenticate, getUserById);
+router.get('/', authenticate, authorizeAdmin, listUsers);
+router.get('/:id', authenticate, authorizeAdmin, getUserById);
 router.patch('/:id', authenticate, authorizeAdmin, validate(employeeUpdateValidation), updateUser);
 router.delete('/:id', authenticate, authorizeAdmin, deleteUser);
 

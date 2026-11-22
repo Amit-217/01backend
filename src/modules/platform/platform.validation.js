@@ -18,6 +18,7 @@ const context = z.strictObject({
   reason: z.string().trim().min(5).max(250),
 });
 const status = context.extend({ status: z.enum(['active', 'inactive']) });
+const role = context.extend({ role: z.enum(['admin', 'employee']) });
 const directionAndQuantity = {
   direction: z.enum(['IN', 'OUT']),
   quantity: z.number().min(0.0001).max(Number.MAX_SAFE_INTEGER),
@@ -45,6 +46,6 @@ const directoryQuery = z.strictObject({
 const pageQuery = directoryQuery.omit({ lookup: true });
 
 module.exports = {
-  readableId, staffIdentity, login, context, status, adjustment, bulkStock, recovery,
+  readableId, staffIdentity, login, context, status, role, adjustment, bulkStock, recovery,
   finishRecovery, directoryQuery, pageQuery,
 };

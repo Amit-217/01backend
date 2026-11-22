@@ -16,6 +16,12 @@ const { activeTenant, createSession, rotateSession, revokeSession, revokeUserSes
 
 const OTP_TTL = Number(process.env.OTP_EXPIRY || 10) * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
+const OTP_RESEND_MS = 60 * 1000;
+
+// A code for this purpose went out less than a minute ago; reuse it instead of mailing another.
+const sentRecently = (user, purpose) => user.otpPurpose === purpose && user.otpSentAt
+  && Date.now() - new Date(user.otpSentAt).getTime() < OTP_RESEND_MS
+  && user.otpExpiresAt && user.otpExpiresAt > new Date();
 
 const clearOtpData = (user) => {
   user.otp = null;
@@ -35,6 +41,7 @@ const createOtpRecord = async (user, purpose, session) => {
   user.otpPurpose = purpose;
   user.otpExpiresAt = new Date(Date.now() + OTP_TTL);
   user.otpAttempts = 0;
+  user.otpSentAt = new Date();
   await user.save({ session });
   return otp;
 };
@@ -57,7 +64,9 @@ const verifyOtpForUser = async (user, otp, purpose) => {
   }
 };
 
-const verifyTenantEmail = async ({ email, otp, purpose = OTP_PURPOSES.COMPANY_EMAIL_VERIFICATION }) => {
+const verifyTenantEmail = async ({
+  email, otp, purpose = OTP_PURPOSES.COMPANY_EMAIL_VERIFICATION, newPassword, confirmPassword,
+}) => {
   if (purpose === OTP_PURPOSES.COMPANY_EMAIL_VERIFICATION) {
     return onboarding.verifyCompanyEmail({ email, otp });
   }
@@ -68,9 +77,22 @@ const verifyTenantEmail = async ({ email, otp, purpose = OTP_PURPOSES.COMPANY_EM
     email: normalizeEmail(email), role: 'employee', status: 'active', emailVerified: false,
   });
   await verifyOtpForUser(user, otp, purpose);
+  // The code stays valid after this check, so an invited employee can retry with a password.
+  if (user.passwordSetupRequired && !newPassword) {
+    throw new AppError(400, 'Choose a password to finish setting up your account.');
+  }
+  if (newPassword && newPassword !== confirmPassword) {
+    throw new AppError(400, 'Password confirmation does not match.');
+  }
   user.emailVerified = true;
   clearOtpData(user);
+  if (newPassword) {
+    user.password = await hashPassword(newPassword);
+    user.passwordSetupRequired = false;
+    user.$inc('credentialVersion', 1);
+  }
   await user.save();
+  if (newPassword) await revokeUserSessions(user.userId, user.credentialVersion);
   return { userId: user.userId, message: 'Email verified successfully.' };
 };
 
@@ -123,7 +145,7 @@ const deliverPasswordReset = async (email, otp) => {
 const forgotPassword = async ({ email }) => {
   const user = await User.findOne({ email: normalizeEmail(email), status: 'active' });
   const message = 'If an account exists, a password reset code has been sent.';
-  if (!user) return { message };
+  if (!user || sentRecently(user, OTP_PURPOSES.PASSWORD_RESET)) return { message };
   const otp = await preparePasswordReset(user);
   await deliverPasswordReset(user.email, otp);
   return { message };
@@ -134,6 +156,8 @@ const verifyResetOtp = async ({ email, otp }) => {
   await verifyOtpForUser(user, otp, OTP_PURPOSES.PASSWORD_RESET);
   user.passwordResetVerified = true;
   user.passwordResetVerifiedAt = new Date();
+  // Give the user a full window to choose the new password after proving the code.
+  user.otpExpiresAt = new Date(Date.now() + OTP_TTL);
   await user.save();
   return {
     message: 'OTP verified successfully. You can now reset your password.',
@@ -179,7 +203,7 @@ const resendOtp = async ({ email, purpose }) => {
   const user = await User.findOne({
     email: normalizeEmail(email), role: 'employee', status: 'active', emailVerified: false,
   });
-  if (user) {
+  if (user && !sentRecently(user, purpose)) {
     const otp = await createOtpRecord(user, purpose);
     if (!(await sendEmailVerificationOTP({ email: user.email, otp, purpose: 'employee email verification' }))) {
       throw new AppError(503, 'The code could not be delivered. Please try again in a few minutes.');

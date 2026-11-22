@@ -177,9 +177,9 @@ Native clients also receive a JSON refresh token. Browsers send `X-Viplora-Clien
 
 ## 5) Employee flow
 
-After admin login, the admin can create employees.
+After admin login, an admin can invite employees, share admin rights, and deactivate or reactivate employees. Team reads are admin-only. A company should keep at least two administrators so access survives one person leaving. If a company loses all its administrators, platform support can restore one with `/users/:userId/role`, subject to the case-reference and audit rules in [PLATFORM.md](PLATFORM.md).
 
-### Step 5.1: Create employee
+### Step 5.1: Invite employee
 Endpoint:
 ```http
 POST /api/users
@@ -195,20 +195,17 @@ Body:
 {
   "firstName": "Rahul",
   "lastName": "Patil",
-  "email": "employee@acme.com",
-  "password": "StrongPassword123",
-  "confirmPassword": "StrongPassword123"
+  "email": "employee@acme.com"
 }
 ```
 
 What happens:
-- employee record is created
+- employee record is created with a random unusable password and `passwordSetupRequired = true`
 - employee email is set to unverified
-- OTP is generated
-- OTP is sent to employee email
-- `otpPurpose = "employee_email_verification"`
+- OTP is generated and sent to the employee email (`otpPurpose = "employee_email_verification"`)
+- the admin never learns the employee's password, so "Recorded by" in the transaction log identifies the employee
 
-This is in `user.service.js`.
+Sending `password` and `confirmPassword` still works for older clients. This is in `user.service.js`.
 
 ---
 
@@ -223,14 +220,21 @@ Body:
 {
   "email": "employee@acme.com",
   "otp": "123456",
-  "purpose": "employee_email_verification"
+  "purpose": "employee_email_verification",
+  "newPassword": "ChosenByEmployee123",
+  "confirmPassword": "ChosenByEmployee123"
 }
 ```
 
 This sets:
 - `user.emailVerified = true`
+- the employee's chosen password, which clears `passwordSetupRequired` and revokes any older sessions
 
-Only after that can the employee log in.
+A missing password for an invited employee returns 400 and leaves the code valid. Only after verification can the employee log in.
+
+### Step 5.3: Deactivate, reactivate, and roles
+- `DELETE /api/users/:id` deactivates an employee and revokes their sessions. `GET /api/users?status=inactive` lists deactivated people. `PATCH /api/users/:id` with `{ "status": "active" }` restores them.
+- `PATCH /api/users/:id` with `{ "role": "admin" }` promotes an active, verified employee. `{ "role": "employee" }` removes another admin's rights. Nobody changes their own role or status.
 
 ---
 

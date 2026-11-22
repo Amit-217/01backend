@@ -60,6 +60,16 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // When the current code was sent; resends inside the cooldown reuse it instead of mailing another.
+    otpSentAt: {
+      type: Date,
+      default: null,
+    },
+    // Invited employees choose their own password when they verify their email.
+    passwordSetupRequired: {
+      type: Boolean,
+      default: false,
+    },
     passwordResetVerified: {
       type: Boolean,
       default: false,

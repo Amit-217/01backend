@@ -62,6 +62,7 @@ const operation = (action, execute, { body, query, write = false, operator = wri
         event.caseReference = req.body.caseReference;
         event.reason = req.body.reason;
         if (req.body.status) event.details = 'Requested status ' + req.body.status;
+        if (req.body.role) event.details = 'Requested role ' + req.body.role;
         if (req.body.outcome) event.details = 'Recovery outcome ' + req.body.outcome;
         if (req.body.correctionOf) event.target = req.body.correctionOf;
       }
@@ -154,6 +155,8 @@ router.post('/tenants/:tenantId/status', operation('tenant.status', (req, sessio
   service.setTenantStatus(req.params.tenantId, req.body.status, session), { write: true, body: rules.status }));
 router.post('/tenants/:tenantId/users/:userId/status', operation('user.status', (req, session) =>
   service.changeUser({ ...req.params, status: req.body.status, session }), { write: true, body: rules.status }));
+router.post('/tenants/:tenantId/users/:userId/role', operation('user.role', (req, session) =>
+  service.changeRole({ ...req.params, role: req.body.role, session }), { write: true, body: rules.role }));
 router.post('/tenants/:tenantId/users/:userId/revoke-sessions', operation('user.sessions.revoke', (req, session) =>
   service.changeUser({ ...req.params, session }), { write: true, body: rules.context }));
 router.post('/tenants/:tenantId/users/:userId/request-recovery', operation('user.recovery', (req, session) =>

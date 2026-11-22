@@ -2,9 +2,14 @@ const { z } = require('zod');
 
 const otpSchema = z.string().trim().regex(/^\d{6}$/, 'OTP must be a 6-digit number');
 
+// bcrypt ignores bytes after the 72nd, so longer passwords would silently match shorter ones.
+const passwordSchema = z.string()
+  .min(8, 'Password must be at least 8 characters')
+  .refine((value) => Buffer.byteLength(value) <= 72, 'Password must be at most 72 bytes.');
+
 const passwordConfirmation = (passwordField, confirmField) =>
   z.object({
-    [passwordField]: z.string().min(8, 'Password must be at least 8 characters'),
+    [passwordField]: passwordSchema,
     [confirmField]: z.string().min(8, 'Confirmation must be at least 8 characters'),
   }).superRefine((data, ctx) => {
     if (data[passwordField] && data[confirmField] && data[passwordField] !== data[confirmField]) {
@@ -25,6 +30,13 @@ const verifyEmailValidation = z.object({
   email: z.string().trim().email('Enter a valid email'),
   otp: otpSchema,
   purpose: z.string().optional(),
+  // Employees verifying an invitation choose their password in the same step.
+  newPassword: passwordSchema.optional(),
+  confirmPassword: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if ((data.newPassword || data.confirmPassword) && data.newPassword !== data.confirmPassword) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmPassword'], message: 'Password confirmation does not match.' });
+  }
 });
 
 const adminEmailValidation = z.object({
@@ -85,6 +97,7 @@ const resendOtpValidation = z.object({
 });
 
 module.exports = {
+  passwordSchema,
   registerValidation,
   verifyEmailValidation,
   adminEmailValidation,

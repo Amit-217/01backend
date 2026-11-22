@@ -1,3 +1,4 @@
+const { randomBytes } = require('node:crypto');
 const User = require('./user.model');
 const { AppError } = require('../../../common/utils/errors');
 const { normalizeEmail, hashPassword, generateOtp } = require('../../../common/utils/helpers');
@@ -25,8 +26,20 @@ const createVerificationCode = async () => {
       otpPurpose: OTP_PURPOSES.EMPLOYEE_EMAIL_VERIFICATION,
       otpExpiresAt: new Date(Date.now() + expiresInMinutes * 60 * 1000),
       otpAttempts: 0,
+      otpSentAt: new Date(),
     },
   };
+};
+
+// A deactivated employee of the same company keeps their email; point the admin to Reactivate.
+const assertEmailAvailable = async (email, tenantId, excludeId) => {
+  const existing = await User.findOne({ email, ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
+    .select('tenantId status');
+  if (!existing) return;
+  if (existing.tenantId === tenantId && existing.status === 'inactive') {
+    throw new AppError(409, 'This email belongs to a deactivated employee. Reactivate them from the deactivated list.');
+  }
+  throw duplicateEmail();
 };
 
 const sendEmployeeVerification = async (email, otp) => {
@@ -56,13 +69,15 @@ const createEmployee = async ({ firstName, lastName, email, password, confirmPas
   const last = String(lastName || '').trim();
 
   if (name.length < 2) throw new AppError(400, 'First name is required.');
-  if (!password || password !== confirmPassword) {
+  // Without a password the employee is invited and chooses one when verifying their email.
+  const invited = !password;
+  if (!invited && password !== confirmPassword) {
     throw new AppError(400, 'Password confirmation does not match.');
   }
-  if (await User.exists({ email: normalizedEmail })) throw duplicateEmail();
+  await assertEmailAvailable(normalizedEmail, tenantId);
 
   const userId = await generateReadableId('USR');
-  const hashedPassword = await hashPassword(password);
+  const hashedPassword = await hashPassword(invited ? randomBytes(32).toString('base64url') : password);
   const verification = await createVerificationCode();
   const user = await User.create({
     userId,
@@ -71,39 +86,60 @@ const createEmployee = async ({ firstName, lastName, email, password, confirmPas
     lastName: last,
     email: normalizedEmail,
     password: hashedPassword,
+    passwordSetupRequired: invited,
     role: 'employee',
     emailVerified: false,
     status: 'active',
     ...verification.fields,
   }).catch(mapDuplicateEmail);
   const delivered = await sendEmployeeVerification(user.email, verification.code);
+  const next = invited ? 'They verify their email and choose a password from the sign-in screen.'
+    : 'Please verify the employee email.';
 
   return {
     userId: user.userId,
     email: user.email,
+    emailSent: delivered,
     message: delivered
-      ? 'Employee created. Please verify the employee email.'
+      ? 'Employee invited. ' + next
       : 'Employee created. The verification email could not be sent. The employee can request a new code from the sign-in screen.',
   };
 };
 
-const listUsersForTenant = async (tenantId) =>
-  User.find({ tenantId, role: 'employee', status: 'active' }).sort({ createdAt: -1 });
+/** Active (default) or deactivated members of a company, administrators first. */
+const listUsersForTenant = async (tenantId, status = 'active') =>
+  User.find({ tenantId, status }).sort({ role: 1, createdAt: -1 });
 
 // Public user IDs use the USR-000007 format.
 const getUserByIdForTenant = async (userId, tenantId) => User.findOne({ userId, tenantId });
 
-const updateUserByIdForTenant = async (userId, tenantId, payload) => {
-  const user = await User.findOne({ userId, tenantId, role: 'employee' });
+/**
+ * Admin rules: nobody changes their own role or status; only active, verified employees can be
+ * promoted; another administrator can only have admin rights removed (then edit them as an employee).
+ */
+const updateUserByIdForTenant = async (userId, tenantId, payload, actorId) => {
+  const user = await User.findOne({ userId, tenantId });
   if (!user) return null;
+
+  const roleChange = payload.role !== undefined && payload.role !== user.role;
+  if (user.userId === actorId && (roleChange || payload.status !== undefined)) {
+    throw new AppError(409, 'You cannot change your own role or access.');
+  }
+  if (user.role === 'admin') {
+    const otherFields = Object.keys(payload).filter((field) => field !== 'role' && payload[field] !== undefined);
+    if (!roleChange || otherFields.length) {
+      throw new AppError(409, 'Remove administrator rights before changing this account.');
+    }
+  }
+  if (roleChange && payload.role === 'admin' && (user.status !== 'active' || !user.emailVerified)) {
+    throw new AppError(409, 'Only active employees with a verified email can become administrators.');
+  }
 
   const nextEmail = payload.email ? normalizeEmail(payload.email) : user.email;
   const emailChanged = nextEmail !== user.email;
-  if (emailChanged && await User.exists({ email: nextEmail, _id: { $ne: user._id } })) {
-    throw duplicateEmail();
-  }
+  if (emailChanged) await assertEmailAvailable(nextEmail, tenantId, user._id);
 
-  for (const field of ['firstName', 'lastName', 'status']) {
+  for (const field of ['firstName', 'lastName', 'status', 'role']) {
     if (payload[field] !== undefined) user[field] = payload[field];
   }
 
@@ -114,7 +150,8 @@ const updateUserByIdForTenant = async (userId, tenantId, payload) => {
     user.password = await hashPassword(payload.password);
   }
 
-  const revokeSessions = emailChanged || Boolean(payload.password) || payload.status === 'inactive';
+  // A role change signs the person out so their app reloads with the new permissions.
+  const revokeSessions = emailChanged || Boolean(payload.password) || payload.status === 'inactive' || roleChange;
   if (revokeSessions) clearPreviousCredentials(user);
 
   let verification;

@@ -13,7 +13,8 @@ const createUser = asyncHandler(async (req, res) => {
 });
 
 const listUsers = asyncHandler(async (req, res) => {
-  const users = await listUsersForTenant(req.user.tenantId);
+  const status = req.query.status === 'inactive' ? 'inactive' : 'active';
+  const users = await listUsersForTenant(req.user.tenantId, status);
   return sendSuccess(res, 200, 'Users retrieved successfully.', users.map(sanitizeUser));
 });
 
@@ -27,7 +28,7 @@ const getUserById = asyncHandler(async (req, res) => {
 });
 
 const updateUser = asyncHandler(async (req, res) => {
-  const user = await updateUserByIdForTenant(req.params.id, req.user.tenantId, req.body);
+  const user = await updateUserByIdForTenant(req.params.id, req.user.tenantId, req.body, req.user.userId);
   if (!user) {
     return sendError(res, 404, 'User not found.');
   }

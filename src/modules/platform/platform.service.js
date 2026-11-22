@@ -67,6 +67,22 @@ const changeUser = async ({ tenantId, userId, status, session }) => {
   return invalidateSessions(user, session);
 };
 
+/** Lets support restore admin access when a company's only administrator can no longer sign in. */
+const changeRole = async ({ tenantId, userId, role, session }) => {
+  const user = await loadUser(tenantId, userId, session);
+  if (user.role === role) return sanitizeUser(user);
+  if (role === 'admin' && (user.status !== 'active' || !user.emailVerified)) {
+    throw new AppError(409, 'Only an active user with a verified email can become an administrator.');
+  }
+  if (role === 'employee' && !await User.exists({
+    tenantId, role: 'admin', status: 'active', userId: { $ne: userId },
+  }).session(session)) {
+    throw new AppError(409, 'Make another user an administrator before removing this one.');
+  }
+  user.role = role;
+  return invalidateSessions(user, session);
+};
+
 const requestRecovery = async (tenantId, userId, session) => {
   const user = await loadUser(tenantId, userId, session);
   if (!user.emailVerified || user.status !== 'active') {
@@ -185,6 +201,7 @@ const completeRecovery = async (req, session) => {
 };
 
 module.exports = {
-  readTenant, listTenants, listUsers, listMaterials, listAudit, listChanges, setTenantStatus, changeUser, requestRecovery,
+  readTenant, listTenants, listUsers, listMaterials, listAudit, listChanges, setTenantStatus, changeUser, changeRole,
+  requestRecovery,
   recordAdjustment, recordReversal, previewStock, previewRecovery, approveChange, completeRecovery,
 };
