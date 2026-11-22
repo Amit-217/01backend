@@ -18,10 +18,13 @@ const direction = z.enum(['IN', 'OUT']);
 const quantity = z.number().min(0.0001).max(1e12);
 const reason = z.string().trim().min(1).max(250);
 const movement = z.discriminatedUnion('type', [
-  z.strictObject({ type: z.enum(['RECEIPT', 'DISPATCH', 'RETURN']), ...movementFields() }),
+  z.strictObject({ type: z.enum(['RECEIPT', 'DISPATCH']), ...movementFields() }),
+  z.strictObject({ type: z.literal('RETURN'), ...movementFields(), dispatchId: objectId.optional() }),
   z.strictObject({ type: z.literal('OPENING'), ...movementFields(), reason }),
   z.strictObject({ type: z.literal('ADJUSTMENT'), ...movementFields(), direction, reason }),
-]);
+]).refine((value) => value.type !== 'RETURN' || value.dispatchId || value.reference, {
+  path: ['reference'], message: 'Select an original dispatch or enter an external dispatch reference.',
+});
 
 function movementFields() {
   return {
@@ -33,6 +36,8 @@ function movementFields() {
 const movementQuery = z.strictObject({
   productId: objectId.optional(), skuId: objectId.optional(), type: z.enum(movementTypes).optional(),
   actorId: z.string().trim().min(1).max(128).optional(),
+  search: z.string().trim().min(1).max(120).optional(),
+  order: z.enum(['movement', 'posted']).optional(),
   from: z.iso.date().optional(), to: z.iso.date().optional(),
   cursor: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z_[a-f\d]{24}$/).optional(),
   limit: z.string().regex(/^[1-9]\d?$/).transform(Number).pipe(z.number().max(50)).optional(),

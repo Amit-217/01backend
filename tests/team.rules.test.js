@@ -12,7 +12,7 @@ const routeHandlers = (method, path) => userRouter.stack
   ?.route.stack.map((entry) => entry.handle) ?? [];
 
 test('team reads and writes require the admin role', () => {
-  for (const [method, path] of [['get', '/'], ['get', '/:id'], ['post', '/'], ['patch', '/:id'], ['delete', '/:id']]) {
+  for (const [method, path] of [['get', '/'], ['get', '/capacity'], ['get', '/:id'], ['post', '/'], ['patch', '/:id'], ['delete', '/:id']]) {
     assert.ok(routeHandlers(method, path).includes(authorizeAdmin), `${method.toUpperCase()} ${path} must use authorizeAdmin`);
   }
 });

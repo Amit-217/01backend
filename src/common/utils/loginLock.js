@@ -11,9 +11,10 @@ const LOCK_MS = 10 * 60 * 1000;
 const lockFields = {
   failedLoginCount: { type: Number, default: 0 },
   lastFailedLoginAt: { type: Date, default: null },
+  failedLoginAttempts: { type: [Date], default: undefined },
   lockedUntil: { type: Date, default: null },
 };
-const clearedLock = { failedLoginCount: 0, lastFailedLoginAt: null, lockedUntil: null };
+const clearedLock = { failedLoginCount: 0, lastFailedLoginAt: null, failedLoginAttempts: [], lockedUntil: null };
 
 const minutesLeft = (until) => Math.max(1, Math.ceil((new Date(until).getTime() - Date.now()) / 60_000));
 
@@ -26,26 +27,38 @@ const assertNotLocked = (account, message) => {
   throw new AppError(429, message || `Too many failed sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}, or reset your password.`);
 };
 
-/** Counts a failed attempt; returns true when this attempt locked the account. */
+const unlocked = () => ({ $or: [{ lockedUntil: null }, { lockedUntil: { $lte: new Date() } }] });
+
+/** Adds an attempt and sets the lock in the same document update. */
 const recordFailure = async (Model, account) => {
-  const now = new Date();
-  const recent = account.lastFailedLoginAt && now.getTime() - new Date(account.lastFailedLoginAt).getTime() < LOCK_MS;
-  const updated = await Model.findOneAndUpdate({ _id: account._id }, recent
-    ? { $inc: { failedLoginCount: 1 }, $set: { lastFailedLoginAt: now } }
-    : { $set: { failedLoginCount: 1, lastFailedLoginAt: now } }, { new: true }).select('failedLoginCount');
-  if (!updated || updated.failedLoginCount < MAX_FAILURES) return false;
-  await Model.updateOne({ _id: account._id }, {
-    $set: { ...clearedLock, lockedUntil: new Date(now.getTime() + LOCK_MS) },
-  });
-  return true;
+  // Older accounts recorded only the last timestamp. Carry their remaining count into the new window.
+  const legacyAttempts = { $map: {
+    input: { $range: [0, { $min: [{ $ifNull: ['$failedLoginCount', 0] }, MAX_FAILURES - 1] }] },
+    as: 'index',
+    in: '$lastFailedLoginAt',
+  } };
+  const attempts = { $ifNull: ['$failedLoginAttempts', legacyAttempts] };
+  const recent = { $filter: {
+    input: attempts, as: 'attempt', cond: { $gt: ['$$attempt', { $subtract: ['$$NOW', LOCK_MS] }] },
+  } };
+  const atLimit = { $gte: [{ $size: '$failedLoginAttempts' }, MAX_FAILURES] };
+  const updated = await Model.findOneAndUpdate({ _id: account._id, ...unlocked() }, [
+    { $set: { failedLoginAttempts: { $concatArrays: [recent, ['$$NOW']] } } },
+    { $set: {
+      lockedUntil: { $cond: [atLimit, { $add: ['$$NOW', LOCK_MS] }, null] },
+      failedLoginAttempts: { $cond: [atLimit, [], '$failedLoginAttempts'] },
+      failedLoginCount: 0,
+      lastFailedLoginAt: null,
+    } },
+  ], { new: true }).select('lockedUntil');
+  return isLocked(updated ?? await Model.findById(account._id).select('lockedUntil'));
 };
 
 const clearFailures = async (Model, account) => {
-  if (account.failedLoginCount || account.lockedUntil || account.lastFailedLoginAt) {
-    await Model.updateOne({ _id: account._id }, { $set: clearedLock });
-  }
+  const cleared = await Model.updateOne({ _id: account._id, ...unlocked() }, { $set: clearedLock });
+  if (!cleared.matchedCount) assertNotLocked(await Model.findById(account._id).select('lockedUntil'));
 };
 
 module.exports = {
-  MAX_FAILURES, LOCK_MS, lockFields, clearedLock, isLocked, assertNotLocked, recordFailure, clearFailures,
+  MAX_FAILURES, LOCK_MS, lockFields, clearedLock, isLocked, assertNotLocked, recordFailure, clearFailures, unlocked,
 };

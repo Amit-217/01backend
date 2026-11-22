@@ -92,6 +92,8 @@ test('company signup, employee verification, and password reset through the API'
     assert.equal(mail.length, mailCountBefore, 'The verified company email needs no second OTP');
     assert.equal(await User.countDocuments({ tenantId: same.tenantId, role: 'admin' }), 1);
 
+    const Tenant = require('../src/modules/tenant/tenant/tenant.model');
+    await Tenant.updateOne({ tenantId }, { $set: { teamLimits: { admin: 1, employee: 1 } } });
     const employeeEmail = 'employee@example.test';
     await api.post('/api/users').auth(adminAccess, { type: 'bearer' }).send({
       firstName: 'Stock', lastName: 'Operator', email: employeeEmail, password: oldPassword, confirmPassword: oldPassword,

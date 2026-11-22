@@ -7,16 +7,21 @@ const movementTypes = ['RECEIPT', 'DISPATCH', 'RETURN', 'OPENING', 'ADJUSTMENT',
 const productSchema = new Schema({
   tenantId: { type: String, required: true },
   name: { type: String, required: true },
+  nameKey: { type: String, select: false },
   unit: { type: String, enum: units, required: true, immutable: true },
   isActive: { type: Boolean, default: true },
   skuRevision: { type: Number, default: 0, select: false },
 }, { timestamps: true });
 productSchema.index({ tenantId: 1, name: 1 });
+productSchema.index({ tenantId: 1, unit: 1, nameKey: 1 }, {
+  unique: true, partialFilterExpression: { nameKey: { $type: 'string' } },
+});
 
 const skuSchema = new Schema({
   tenantId: { type: String, required: true },
   productId: { type: Schema.Types.ObjectId, ref: 'FinishedProduct', required: true, immutable: true },
   code: { type: String, required: true },
+  reservedCodes: { type: [String], default: undefined },
   size: String,
   colour: String,
   unit: { type: String, enum: units, required: true, immutable: true },
@@ -24,6 +29,9 @@ const skuSchema = new Schema({
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 skuSchema.index({ tenantId: 1, code: 1 }, { unique: true });
+skuSchema.index({ tenantId: 1, reservedCodes: 1 }, {
+  unique: true, partialFilterExpression: { reservedCodes: { $exists: true } },
+});
 skuSchema.index({ tenantId: 1, productId: 1, isActive: 1 });
 
 const movementSchema = new Schema({
@@ -49,11 +57,16 @@ const movementSchema = new Schema({
   stockUnit: { type: String, enum: units, required: true },
   reversalOf: Schema.Types.ObjectId,
   correctionOf: Schema.Types.ObjectId,
+  dispatchId: Schema.Types.ObjectId,
   idempotencyKey: { type: String, select: false },
   fingerprint: { type: String, select: false },
 }, { timestamps: { createdAt: true, updatedAt: false } });
 movementSchema.index({ tenantId: 1, date: -1, _id: -1 });
 movementSchema.index({ tenantId: 1, skuId: 1, date: -1, _id: -1 });
+movementSchema.index({ tenantId: 1, createdAt: -1, _id: -1 });
+movementSchema.index({ tenantId: 1, skuId: 1, createdAt: -1, _id: -1 });
+movementSchema.index({ tenantId: 1, skuCode: 1, skuId: 1 });
+movementSchema.index({ tenantId: 1, dispatchId: 1 });
 movementSchema.index({ tenantId: 1, createdBy: 1, date: -1, _id: -1 });
 movementSchema.index({ tenantId: 1, createdBy: 1, idempotencyKey: 1 }, {
   unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } },

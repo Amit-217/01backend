@@ -52,6 +52,11 @@ const tenantSchema = new mongoose.Schema(
     accessMode: { type: String, enum: ['full', 'read_only'], default: 'full' },
     paidUntil: { type: Date, default: null },
     billingNote: { type: String, default: '', trim: true, maxlength: 500 },
+    teamLimits: {
+      admin: { type: Number, min: 1, default: null },
+      employee: { type: Number, min: 0, default: null },
+    },
+    teamRevision: { type: Number, default: 0, select: false },
     adminEmail: {
       type: String,
       default: null,

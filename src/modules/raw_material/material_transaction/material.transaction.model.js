@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { movementTypes, referenceTypes } = require('./material.transaction.validation');
 
 const materialTransactionSchema = new mongoose.Schema(
   {
@@ -18,11 +19,7 @@ const materialTransactionSchema = new mongoose.Schema(
     // Type of transaction
     type: {
       type: String,
-      enum: [
-        "IN",
-        "CONSUMPTION",
-        "ADJUSTMENT",
-      ],
+      enum: movementTypes,
       required: true,
     },
 
@@ -55,12 +52,7 @@ const materialTransactionSchema = new mongoose.Schema(
     // What caused this transaction
     referenceType: {
       type: String,
-      enum: [
-        "PURCHASE",
-        "DIRECT_CONSUMPTION",
-        "PRODUCTION",
-        "ADJUSTMENT",
-      ],
+      enum: referenceTypes,
       required: true,
     },
 
@@ -69,6 +61,7 @@ const materialTransactionSchema = new mongoose.Schema(
     referenceId: {
       type: mongoose.Schema.Types.ObjectId,
     },
+    reference: { type: String, trim: true, maxlength: 120 },
 
     reason: {
       type: String,
@@ -119,7 +112,6 @@ const materialTransactionSchema = new mongoose.Schema(
         delete transaction.actorRole;
         delete transaction.stockBefore;
         delete transaction.stockAfter;
-        delete transaction.stockUnit;
         delete transaction.correctionOf;
         return transaction;
       },
@@ -132,6 +124,7 @@ materialTransactionSchema.index({
   tenantId: 1,
   rawMaterialId: 1,
   date: -1,
+  _id: -1,
 });
 
 // Tenant-wide transaction history

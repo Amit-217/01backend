@@ -5,9 +5,11 @@ const RawMaterial = require('../raw_material/raw.material.model');
 const Vendor = require('../vendor/vendor.model');
 const { AppError } = require('../../../common/utils/errors');
 const { applyStockChange, withStockTransaction, idempotencyKeyPattern } = require('../../../common/utils/stock');
+const { movementDate, referencesByType } = require('./material.transaction.validation');
 
 const normalizeDirection = (type, direction) => {
   if (type === 'IN' && direction === 'IN') return 'IN';
+  if (type === 'OPENING' && direction === 'IN') return 'IN';
   if (type === 'CONSUMPTION' && direction === 'OUT') return 'OUT';
   if (type === 'ADJUSTMENT' && ['IN', 'OUT'].includes(direction)) return direction;
   return null;
@@ -40,8 +42,9 @@ const listMaterialTransactions = async (tenantId, filters = {}) => {
   }
 
   return MaterialTransaction.find(query)
-    .populate('rawMaterialId', 'code name currentStock')
-    .populate('vendorId', 'name')
+    .select('+stockUnit')
+    .populate({ path: 'rawMaterialId', select: 'code name unit currentStock isActive', match: { tenantId } })
+    .populate({ path: 'vendorId', select: 'name', match: { tenantId } })
     .sort({ date: -1, createdAt: -1 });
 };
 
@@ -55,6 +58,7 @@ const createMaterialTransaction = async ({
   vendorId,
   referenceType,
   referenceId,
+  reference,
   reason,
   date,
   notes,
@@ -69,6 +73,9 @@ const createMaterialTransaction = async ({
   const normalizedDirection = normalizeDirection(type, direction);
   if (!normalizedDirection) {
     throw new AppError(400, 'Invalid direction for this transaction type.');
+  }
+  if (!referencesByType[type]?.includes(referenceType)) {
+    throw new AppError(400, 'Reference type does not match this stock movement.');
   }
 
   const qty = Number(quantity);
@@ -87,7 +94,10 @@ const createMaterialTransaction = async ({
   if (normalizedRate !== undefined && (!Number.isFinite(normalizedRate) || normalizedRate < 0)) {
     throw new AppError(400, 'Rate must be a nonnegative number.');
   }
-  const requestedDate = date ? new Date(date) : undefined;
+  if (date !== undefined && !(date instanceof Date) && !movementDate.safeParse(date).success) {
+    throw new AppError(400, 'Enter a real movement date.');
+  }
+  const requestedDate = date === undefined ? undefined : new Date(date);
   if (requestedDate && Number.isNaN(requestedDate.getTime())) {
     throw new AppError(400, 'Date must be valid.');
   }
@@ -107,6 +117,7 @@ const createMaterialTransaction = async ({
     vendorId: vendorId ? normalizeId(vendorId, 'Vendor') : undefined,
     referenceType,
     referenceId: referenceId ? normalizeId(referenceId, 'Reference') : undefined,
+    reference: reference?.trim() || undefined,
     reason: reason ? String(reason).trim() || undefined : undefined,
     date: requestedDate,
     notes: notes ? String(notes).trim() || undefined : undefined,
@@ -143,6 +154,13 @@ const createMaterialTransaction = async ({
     const materialQuery = { _id: payload.rawMaterialId, tenantId, isActive: { $ne: false } };
     if (expectedStock !== undefined) materialQuery.currentStock = expectedStock === 0 ? { $in: [0, null] } : expectedStock;
     if (expectedUnit !== undefined) materialQuery.unit = expectedUnit;
+    // The balance write serializes this check with every other movement for the material.
+    if (type === 'OPENING') {
+      if (await MaterialTransaction.exists({ tenantId, rawMaterialId: payload.rawMaterialId }).session(session)) {
+        throw new AppError(409, 'Opening stock is only available before the first movement.');
+      }
+      materialQuery.currentStock = { $in: [0, null] };
+    }
     const adjustment = normalizedDirection === 'IN' ? qty : -qty;
     const balance = await applyStockChange(RawMaterial, materialQuery, adjustment, session);
     if (!balance) {
@@ -150,8 +168,11 @@ const createMaterialTransaction = async ({
         .select('isActive currentStock unit').session(session);
       if (!material) throw new AppError(404, 'Raw material not found.');
       if (material.isActive === false) throw new AppError(400, 'Raw material is inactive.');
-      if ((expectedStock !== undefined && (material.currentStock ?? 0) !== expectedStock)
-        || (expectedUnit !== undefined && material.unit !== expectedUnit)) {
+      if (expectedUnit !== undefined && material.unit !== expectedUnit) {
+        throw new AppError(409, 'The material unit changed. Refresh the material and check the quantity.');
+      }
+      if (type === 'OPENING') throw new AppError(409, 'Opening stock requires a material with no stock or movements.');
+      if (expectedStock !== undefined && (material.currentStock ?? 0) !== expectedStock) {
         throw new AppError(409, 'Stock changed since preview. Create a new preview.');
       }
       throw new AppError(400, 'Insufficient stock for this transaction.');
@@ -173,8 +194,14 @@ const createMaterialTransaction = async ({
 
 const getMaterialTransactionById = async (id, tenantId) => {
   return MaterialTransaction.findOne({ _id: id, tenantId })
-    .populate('rawMaterialId', 'code name currentStock')
-    .populate('vendorId', 'name');
+    .select('+stockUnit')
+    .populate({ path: 'rawMaterialId', select: 'code name unit currentStock isActive', match: { tenantId } })
+    .populate({ path: 'vendorId', select: 'name', match: { tenantId } });
+};
+
+const getMovementSubmission = async (tenantId, createdBy, idempotencyKey) => {
+  if (!idempotencyKeyPattern.test(idempotencyKey)) throw new AppError(400, 'Invalid submission key.');
+  return MaterialTransaction.findOne({ tenantId, createdBy, idempotencyKey }).select('+stockUnit');
 };
 
 const reverseMaterialTransactionById = async (id, tenantId, createdBy, actor = {}, callerSession) => {
@@ -186,17 +213,22 @@ const reverseMaterialTransactionById = async (id, tenantId, createdBy, actor = {
     const existing = await MaterialTransaction.findOne(reversalQuery).session(session);
     if (existing) return existing;
 
-    const original = await MaterialTransaction.findOne({ _id: transactionId, tenantId }).session(session);
+    const original = await MaterialTransaction.findOne({ _id: transactionId, tenantId }).select('+stockUnit').session(session);
     if (!original) return null;
     if (original.reversalOf) throw new AppError(409, 'A reversal cannot be reversed.');
 
     const direction = original.direction === 'IN' ? 'OUT' : 'IN';
     const adjustment = direction === 'IN' ? original.quantity : -original.quantity;
-    const materialQuery = { _id: original.rawMaterialId, tenantId };
+    const materialQuery = { _id: original.rawMaterialId, tenantId, isActive: { $ne: false } };
+    if (original.stockUnit) materialQuery.unit = original.stockUnit;
     const balance = await applyStockChange(RawMaterial, materialQuery, adjustment, session);
     if (!balance) {
-      const material = await RawMaterial.exists(materialQuery).session(session);
+      const material = await RawMaterial.findOne({ _id: original.rawMaterialId, tenantId }).select('isActive unit').session(session);
       if (!material) throw new AppError(404, 'Raw material not found.');
+      if (material.isActive === false) throw new AppError(409, 'Restore the material before reversing this movement.');
+      if (original.stockUnit && material.unit !== original.stockUnit) {
+        throw new AppError(409, 'The recorded unit differs from the material’s current unit. Contact Viplora Support.');
+      }
       throw new AppError(400, 'Cannot reverse this movement because it would produce a negative stock balance.');
     }
 
@@ -221,5 +253,6 @@ module.exports = {
   listMaterialTransactions,
   createMaterialTransaction,
   getMaterialTransactionById,
+  getMovementSubmission,
   reverseMaterialTransactionById,
 };

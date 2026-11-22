@@ -63,6 +63,7 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     await tenant(employee, 'post', '/products').send(product).expect(403);
     const created = (await tenant(admin, 'post', '/products').send(product).expect(201)).body.data;
     const productId = created._id;
+    await tenant(admin, 'post', '/products').send({ ...product, name: ' classic   t-shirt ' }).expect(409);
     const otherProduct = (await tenant(other, 'post', '/products').send(product).expect(201)).body.data;
     await tenant(other, 'get', '/products/' + productId).expect(404);
     await tenant(admin, 'post', '/skus').send({ productId: otherProduct._id, code: 'OTHER' }).expect(404);
@@ -74,6 +75,7 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     assert.equal(medium.code, 'TSH-BLK-M');
     assert.equal(medium.currentStock, 0);
     await tenant(admin, 'post', '/skus').send({ ...sku, code: '  TSH-BLK-M  ' }).expect(409);
+    await tenant(admin, 'post', '/skus').send({ ...sku, code: 'SAME-VARIANT', size: 'm', colour: ' BLACK ' }).expect(409);
     await tenant(other, 'post', '/skus').send({ ...sku, productId: otherProduct._id }).expect(201);
     await tenant(other, 'get', '/skus/' + medium._id).expect(404);
     const large = (await tenant(admin, 'post', '/skus').send({ ...sku, code: 'TSH-BLK-L', size: 'L' }).expect(201)).body.data;
@@ -85,7 +87,14 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     assert.equal(received.stockBefore, undefined);
     assert.equal(received.actor, undefined);
     assert.equal((await post(employee, 'receipt', receipt).expect(201)).body.data._id, received._id);
+    const recovery = await tenant(employee, 'get', '/movements/submissions/receipt').expect('Cache-Control', 'no-store').expect(200);
+    assert.equal(recovery.body.data._id, received._id);
+    await tenant(admin, 'get', '/movements/submissions/receipt').expect(404);
+    await tenant(other, 'get', '/movements/submissions/receipt').expect(404);
+    await tenant(employee, 'get', '/movements/submissions/bad%20key').expect(400);
     await post(employee, 'receipt', { ...receipt, quantity: 31 }).expect(409);
+    await post(employee, 'fractional-piece', { ...receipt, quantity: 1.5 }).expect(400);
+    await post(employee, 'impossible-date', { ...receipt, date: '2026-02-30' }).expect(400);
     const opening = { skuId: large._id, type: 'OPENING', quantity: 20, reason: 'Verified first count' };
     await post(employee, 'opening', opening).expect(403);
     await post(admin, 'opening', opening).expect(201);
@@ -98,7 +107,8 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     assert.deepEqual([await balance(medium._id), await balance(large._id)], [20, 20]);
     await tenant(admin, 'patch', '/skus/' + medium._id).send({ isActive: false }).expect(409);
     await tenant(admin, 'patch', '/products/' + productId).send({ isActive: false }).expect(409);
-    await post(employee, 'return', { skuId: medium._id, type: 'RETURN', quantity: 1 }).expect(201);
+    await post(employee, 'unreferenced-return', { skuId: medium._id, type: 'RETURN', quantity: 1 }).expect(400);
+    await post(employee, 'return', { skuId: medium._id, type: 'RETURN', quantity: 1, reference: 'EXTERNAL-41' }).expect(201);
 
     const failure = t.mock.method(FinishedMovement, 'create', async () => { throw new AppError(400, 'Fixture insert failure.'); });
     try {
@@ -113,7 +123,11 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     await tenant(employee, 'get', '/movements/audit').expect(403);
     await tenant(other, 'get', '/movements/audit/' + received._id).expect(404);
     await tenant(admin, 'get', '/movements/audit').query({ 'skuId[$ne]': 'x' }).expect(400);
-    await tenant(admin, 'patch', '/skus/' + medium._id).send({ code: 'TSH-BLK-M-V2', colour: 'Jet Black' }).expect(200);
+    await tenant(admin, 'patch', '/skus/' + medium._id).send({ size: 'XL', colour: 'Jet Black' }).expect(409);
+    const renamed = (await tenant(admin, 'patch', '/skus/' + medium._id).send({ code: 'TSH-BLK-M-V2', colour: 'black' }).expect(200)).body.data;
+    assert.deepEqual(renamed.aliases, ['TSH-BLK-M']);
+    assert.equal(renamed.currentStock, 6);
+    await tenant(admin, 'post', '/skus').send({ productId, code: 'TSH-BLK-M', size: '2XL' }).expect(409);
     await User.updateOne({ tenantId: 'tenant-a', userId: 'employee-a' }, { $set: { firstName: 'Renamed' } });
     const audit = (await tenant(admin, 'get', '/movements/audit/' + dispatched._id).expect(200)).body.data;
     assert.deepEqual([audit.skuCode, audit.actor.label, audit.stockBefore, audit.stockAfter], ['TSH-BLK-M', 'Stock Clerk', 30, 20]);
@@ -146,6 +160,12 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     const corrected = (await adjust(correction).expect(200)).body.data;
     assert.equal(corrected.correctionOf, dispatched._id);
     assert.equal((await adjust(correction).expect(200)).body.data._id, corrected._id);
+    const correctionPath = operations + '/movements/submissions/repair';
+    assert.equal((await http(operator.token, 'get', correctionPath).expect(200)).body.data._id, corrected._id);
+    await http(support.token, 'get', correctionPath).expect(403);
+    await http(operator.token, 'get', correctionPath.replace('tenant-a', 'tenant-b')).expect(404);
+    const secondOperator = await staffLogin('separate-operator', 'operator');
+    await http(secondOperator.token, 'get', correctionPath).expect(404);
     assert.equal(await balance(medium._id), 15);
     assert.ok(await PlatformAudit.exists({
       tenantId: 'tenant-a', staffId: operator.staff.id, action: 'finished.movements.adjust',
@@ -155,9 +175,47 @@ test('finished goods keep independent SKU balances, scope audit access and suppo
     await post(admin, 'clear', { skuId: large._id, type: 'ADJUSTMENT', direction: 'OUT', quantity: 20, reason: 'Verified stock reconciliation' }).expect(201);
     await tenant(admin, 'patch', '/skus/' + large._id).send({ isActive: false }).expect(200);
     await tenant(employee, 'get', '/skus/' + large._id).expect(404);
+    const options = (await tenant(employee, 'get', '/movements/filter-options').expect(200)).body.data;
+    assert.ok(options.skus.some((item) => item._id === large._id && item.isActive === false));
+    assert.ok(options.skus.some((item) => item._id === medium._id && item.aliases.includes('TSH-BLK-M')));
+    assert.ok(options.skus.every((item) => !('currentStock' in item)));
     await tenant(admin, 'get', '/movements/audit').query({ skuId: large._id }).expect(200);
     await post(employee, 'archived', { ...receipt, skuId: large._id }).expect(409);
     await tenant(admin, 'patch', '/skus/' + large._id).send({ isActive: true }).expect(200);
+
+    const short = (await tenant(admin, 'post', '/skus').send({ ...sku, code: 'RETURN-TEST', size: 'XS' }).expect(201)).body.data;
+    await post(employee, 'return-seed', {
+      skuId: short._id, type: 'RECEIPT', quantity: 10, date: '2026-11-21',
+    }).expect(201);
+    const originalDispatch = (await post(employee, 'linked-dispatch', {
+      skuId: short._id, type: 'DISPATCH', quantity: 4, date: '2026-11-20', reference: 'CHALLAN-[QA]',
+    }).expect(201)).body.data;
+    const query = { order: 'posted', skuId: short._id, limit: 1 };
+    const recent = (await tenant(admin, 'get', '/movements/audit').query(query).expect(200)).body.data;
+    assert.equal(recent.items[0]._id, originalDispatch._id);
+    assert.deepEqual([recent.items[0].stockBefore, recent.items[0].stockAfter], [10, 6]);
+    const prior = (await tenant(admin, 'get', '/movements/audit').query({ ...query, cursor: recent.nextCursor }).expect(200)).body.data;
+    assert.equal(prior.items[0].type, 'RECEIPT');
+    const effective = (await tenant(employee, 'get', '/movements').query({ skuId: short._id, limit: 1 }).expect(200)).body.data;
+    assert.equal(effective.items[0].type, 'RECEIPT');
+    const search = (await tenant(employee, 'get', '/movements').query({ search: 'challan-[qa]' }).expect(200)).body.data.items;
+    assert.deepEqual(search.map((row) => row._id), [originalDispatch._id]);
+    assert.deepEqual((await tenant(other, 'get', '/movements').query({ search: 'CHALLAN-[QA]' }).expect(200)).body.data.items, []);
+    const linked = { skuId: short._id, type: 'RETURN', quantity: 3, dispatchId: originalDispatch._id };
+    await post(employee, 'different-sku', { ...linked, skuId: medium._id }).expect(404);
+    const returns = await Promise.all(['linked-return-a', 'linked-return-b'].map((key) => post(employee, key, linked)));
+    assert.deepEqual(returns.map((res) => res.status).sort(), [201, 409]);
+    const returned = returns.find((res) => res.status === 201).body.data;
+    assert.equal(returned.dispatchId, originalDispatch._id);
+    assert.equal(await balance(short._id), 9);
+    const reverseDispatch = '/movements/' + originalDispatch._id + '/reverse';
+    await tenant(admin, 'post', reverseDispatch).send({ reason: 'Dispatch recorded twice' }).expect(409);
+    await tenant(admin, 'post', '/movements/' + returned._id + '/reverse').send({ reason: 'Reverse the linked return first' }).expect(201);
+    await post(employee, 'full-return-after-reversal', { ...linked, quantity: 4 }).expect(201);
+
+    const catalogRace = await Promise.all(['Spare Product', ' spare   product '].map((name) =>
+      tenant(admin, 'post', '/products').send({ name, unit: 'kg' })));
+    assert.deepEqual(catalogRace.map((res) => res.status).sort(), [201, 409]);
   } finally {
     try {
       if (mongoose.connection.name === dbName && mongoose.connection.readyState === 1) {

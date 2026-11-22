@@ -6,6 +6,7 @@ const { generateReadableId } = require('../../../common/utils/idGenerator');
 const { OTP_PURPOSES } = require('../auth/auth.constant');
 const { sendEmailVerificationOTP } = require('../auth/auth.util');
 const { revokeUserSessions } = require('../auth/session.service');
+const { withTeamChange, assertSeatAvailable, assertMemberChange } = require('./team-capacity');
 
 const duplicateEmail = () => new AppError(409, 'A user with this email already exists.');
 
@@ -32,9 +33,9 @@ const createVerificationCode = async () => {
 };
 
 // A deactivated employee of the same company keeps their email; point the admin to Reactivate.
-const assertEmailAvailable = async (email, tenantId, excludeId) => {
+const assertEmailAvailable = async (email, tenantId, session, excludeId) => {
   const existing = await User.findOne({ email, ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
-    .select('tenantId status');
+    .select('tenantId status').session(session);
   if (!existing) return;
   if (existing.tenantId === tenantId && existing.status === 'inactive') {
     throw new AppError(409, 'This email belongs to a deactivated employee. Reactivate them from the deactivated list.');
@@ -63,7 +64,7 @@ const clearPreviousCredentials = (user) => {
   }
 };
 
-const createEmployee = async ({ firstName, lastName, email, password, confirmPassword, tenantId }) => {
+const createEmployee = async ({ firstName, lastName, email, password, confirmPassword, tenantId, actorId }) => {
   const normalizedEmail = normalizeEmail(email);
   const name = String(firstName || '').trim();
   const last = String(lastName || '').trim();
@@ -74,24 +75,27 @@ const createEmployee = async ({ firstName, lastName, email, password, confirmPas
   if (!invited && password !== confirmPassword) {
     throw new AppError(400, 'Password confirmation does not match.');
   }
-  await assertEmailAvailable(normalizedEmail, tenantId);
-
   const userId = await generateReadableId('USR');
   const hashedPassword = await hashPassword(invited ? randomBytes(32).toString('base64url') : password);
   const verification = await createVerificationCode();
-  const user = await User.create({
-    userId,
-    tenantId,
-    firstName: name,
-    lastName: last,
-    email: normalizedEmail,
-    password: hashedPassword,
-    passwordSetupRequired: invited,
-    role: 'employee',
-    emailVerified: false,
-    status: 'active',
-    ...verification.fields,
-  }).catch(mapDuplicateEmail);
+  const user = await withTeamChange(tenantId, async (tenant, session) => {
+    await assertEmailAvailable(normalizedEmail, tenantId, session);
+    await assertSeatAvailable(tenant, 'employee', session);
+    const [created] = await User.create([{
+      userId,
+      tenantId,
+      firstName: name,
+      lastName: last,
+      email: normalizedEmail,
+      password: hashedPassword,
+      passwordSetupRequired: invited,
+      role: 'employee',
+      emailVerified: false,
+      status: 'active',
+      ...verification.fields,
+    }], { session });
+    return created;
+  }, { actorId }).catch(mapDuplicateEmail);
   const delivered = await sendEmployeeVerification(user.email, verification.code);
   const next = invited ? 'They verify their email and choose a password from the sign-in screen.'
     : 'Please verify the employee email.';
@@ -117,8 +121,9 @@ const getUserByIdForTenant = async (userId, tenantId) => User.findOne({ userId, 
  * Admin rules: nobody changes their own role or status; only active, verified employees can be
  * promoted; another administrator can only have admin rights removed (then edit them as an employee).
  */
-const updateUserByIdForTenant = async (userId, tenantId, payload, actorId) => {
-  const user = await User.findOne({ userId, tenantId });
+const editMember = async (tenant, session, userId, payload, actorId) => {
+  const { tenantId } = tenant;
+  const user = await User.findOne({ userId, tenantId }).session(session);
   if (!user) return null;
 
   const roleChange = payload.role !== undefined && payload.role !== user.role;
@@ -131,13 +136,14 @@ const updateUserByIdForTenant = async (userId, tenantId, payload, actorId) => {
       throw new AppError(409, 'Remove administrator rights before changing this account.');
     }
   }
-  if (roleChange && payload.role === 'admin' && (user.status !== 'active' || !user.emailVerified)) {
-    throw new AppError(409, 'Only active employees with a verified email can become administrators.');
-  }
-
   const nextEmail = payload.email ? normalizeEmail(payload.email) : user.email;
   const emailChanged = nextEmail !== user.email;
-  if (emailChanged) await assertEmailAvailable(nextEmail, tenantId, user._id);
+  if (roleChange && payload.role === 'admin'
+      && (user.status !== 'active' || payload.status === 'inactive' || !user.emailVerified || emailChanged)) {
+    throw new AppError(409, 'Only active employees with a verified email can become administrators.');
+  }
+  await assertMemberChange(tenant, user, payload, session);
+  if (emailChanged) await assertEmailAvailable(nextEmail, tenantId, session, user._id);
 
   for (const field of ['firstName', 'lastName', 'status', 'role']) {
     if (payload[field] !== undefined) user[field] = payload[field];
@@ -163,23 +169,30 @@ const updateUserByIdForTenant = async (userId, tenantId, payload, actorId) => {
   }
 
   if (revokeSessions) user.$inc('credentialVersion', 1);
-  await user.save().catch(mapDuplicateEmail);
-  if (revokeSessions) await revokeUserSessions(user.userId, user.credentialVersion);
-  if (verification) await sendEmployeeVerification(nextEmail, verification.code);
-  return user;
+  await user.save({ session });
+  if (revokeSessions) await revokeUserSessions(user.userId, user.credentialVersion, session);
+  return { user, verification };
 };
 
-const deleteUserByIdForTenant = async (userId, tenantId) => {
-  const user = await User.findOne({ userId, tenantId, role: 'employee' });
+const updateUserByIdForTenant = async (userId, tenantId, payload, actorId) => {
+  const allowReadOnly = payload.status === 'inactive' && Object.keys(payload).length === 1;
+  const result = await withTeamChange(tenantId, (tenant, session) => editMember(tenant, session, userId, payload, actorId),
+    { actorId, allowReadOnly }).catch(mapDuplicateEmail);
+  if (result?.verification) await sendEmployeeVerification(result.user.email, result.verification.code);
+  return result?.user ?? null;
+};
+
+const deleteUserByIdForTenant = (userId, tenantId, actorId) => withTeamChange(tenantId, async (_tenant, session) => {
+  const user = await User.findOne({ userId, tenantId, role: 'employee' }).session(session);
   if (!user) return null;
 
   user.status = 'inactive';
   clearPreviousCredentials(user);
   user.$inc('credentialVersion', 1);
-  await user.save();
-  await revokeUserSessions(user.userId, user.credentialVersion);
+  await user.save({ session });
+  await revokeUserSessions(user.userId, user.credentialVersion, session);
   return user;
-};
+}, { actorId, allowReadOnly: true });
 
 module.exports = {
   createEmployee,

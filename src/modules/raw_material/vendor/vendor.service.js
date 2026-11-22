@@ -1,6 +1,12 @@
 const Vendor = require('./vendor.model');
 const { AppError } = require('../../../common/utils/errors');
 
+const emailConflict = () => new AppError(409, 'A vendor with this email already exists in this tenant.');
+const mapEmailConflict = (error) => {
+  if (error.code === 11000 && error.keyPattern?.emailKey) throw emailConflict();
+  throw error;
+};
+
 const listVendors = async (tenantId) => {
   return Vendor.find({ tenantId }).sort({ createdAt: -1 });
 };
@@ -22,7 +28,7 @@ const createVendor = async ({ tenantId, name, phone, email, address, gstin }) =>
   if (normalizedEmail) {
     const duplicateEmail = await Vendor.findOne({ tenantId, email: normalizedEmail });
     if (duplicateEmail) {
-      throw new AppError(409, 'A vendor with this email already exists in this tenant.');
+      throw emailConflict();
     }
   }
 
@@ -31,10 +37,11 @@ const createVendor = async ({ tenantId, name, phone, email, address, gstin }) =>
     name: vendorName,
     phone: phone ? String(phone).trim() : undefined,
     email: normalizedEmail,
+    emailKey: normalizedEmail,
     address: address ? String(address).trim() : undefined,
     gstin: gstin ? String(gstin).trim().toUpperCase() : undefined,
     isActive: true,
-  });
+  }).catch(mapEmailConflict);
 };
 
 const getVendorById = async (id, tenantId) => {
@@ -42,7 +49,7 @@ const getVendorById = async (id, tenantId) => {
 };
 
 const updateVendorById = async (id, tenantId, payload) => {
-  const vendor = await Vendor.findOne({ _id: id, tenantId });
+  const vendor = await Vendor.findOne({ _id: id, tenantId }).select('+emailKey');
 
   if (!vendor) {
     return null;
@@ -60,17 +67,18 @@ const updateVendorById = async (id, tenantId, payload) => {
   if (payload.phone !== undefined) vendor.phone = payload.phone ? String(payload.phone).trim() : undefined;
   if (payload.email !== undefined) {
     const email = payload.email ? String(payload.email).trim().toLowerCase() : undefined;
-    if (email) {
+    if (email && email !== vendor.email) {
       const duplicateEmail = await Vendor.findOne({ tenantId, email, _id: { $ne: vendor._id } });
-      if (duplicateEmail) throw new AppError(409, 'A vendor with this email already exists in this tenant.');
+      if (duplicateEmail) throw emailConflict();
     }
+    if (email !== vendor.email) vendor.emailKey = email;
     vendor.email = email;
   }
   if (payload.address !== undefined) vendor.address = payload.address ? String(payload.address).trim() : undefined;
   if (payload.gstin !== undefined) vendor.gstin = payload.gstin ? String(payload.gstin).trim().toUpperCase() : undefined;
   if (payload.isActive !== undefined) vendor.isActive = Boolean(payload.isActive);
 
-  await vendor.save();
+  await vendor.save().catch(mapEmailConflict);
   return vendor;
 };
 

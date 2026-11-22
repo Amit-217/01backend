@@ -69,12 +69,12 @@ const revokeSession = async (sessionId, userId, refreshToken) => {
   return !!(session && refreshToken && session.refreshTokenHash === hashToken(refreshToken));
 };
 
-const revokeUserSessions = async (userId, credentialVersion) => {
+const revokeUserSessions = async (userId, credentialVersion, session = null) => {
   if (!userId) return;
   await AuthSession.deleteMany({
     userId,
     $or: [{ credentialVersion: { $lt: credentialVersion } }, { credentialVersion: { $exists: false } }],
-  });
+  }).session(session);
 };
 
 module.exports = { activeTenant, createSession, rotateSession, getSessionUser, revokeSession, revokeUserSessions };

@@ -20,6 +20,7 @@ const updateRawMaterialValidation = z.object({
 });
 
 module.exports = {
+  allowedUnits,
   createRawMaterialValidation,
   updateRawMaterialValidation,
 };

@@ -44,6 +44,13 @@ router.get('/movements/audit', authorizeAdmin, reply('Finished-goods audit retri
 router.get('/movements/audit/actors', authorizeAdmin, reply('Actors retrieved.', (req) => ledger.listActors(req.user.tenantId)));
 router.get('/movements/audit/:id', authorizeAdmin, reply('Movement retrieved.', (req) =>
   ledger.getMovement(req.user.tenantId, id(req), true)));
+router.get('/movements/filter-options', reply('Finished history options retrieved.', (req) =>
+  catalog.historyOptions(req.user.tenantId)));
+router.get('/movements/submissions/:key', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+}, reply('Finished stock submission retrieved.', (req) =>
+  ledger.getSubmission(req.user.tenantId, req.user.userId, req.params.key, admin(req))));
 router.get('/movements/:id', reply('Movement retrieved.', (req) => ledger.getMovement(req.user.tenantId, id(req), false)));
 
 router.post('/movements', validate(rules.movement), (req, res, next) => {

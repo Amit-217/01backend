@@ -4,7 +4,7 @@ const { comparePassword } = require('../../common/utils/helpers');
 const { AppError, asyncHandler } = require('../../common/utils/errors');
 const { PlatformStaff, PlatformSession, PlatformAudit } = require('./platform.model');
 const { matchStep, unseal } = require('./platform.totp');
-const { assertNotLocked, recordFailure, clearedLock } = require('../../common/utils/loginLock');
+const { assertNotLocked, recordFailure, clearedLock, unlocked } = require('../../common/utils/loginLock');
 
 const tokenHash = (token) => createHash('sha256').update(token).digest('hex');
 const publicStaff = (staff) => ({ id: String(staff._id), name: staff.name, role: staff.role });
@@ -27,10 +27,12 @@ const loginPlatform = async ({ email, password, code }) => {
   const expiresAt = new Date(Date.now() + 30 * 60_000);
   await mongoose.connection.transaction(async (session) => {
     const verified = await PlatformStaff.updateOne({
-      _id: staff._id, active: true, totpSecret: staff.totpSecret, lastTotpStep: { $lt: step },
-    }, { $set: { lastTotpStep: step } }, { session });
-    if (!verified.modifiedCount) throw invalidLogin();
-    await PlatformStaff.updateOne({ _id: staff._id }, { $set: clearedLock }, { session });
+      _id: staff._id, active: true, totpSecret: staff.totpSecret, lastTotpStep: { $lt: step }, ...unlocked(),
+    }, { $set: { lastTotpStep: step, ...clearedLock } }, { session });
+    if (!verified.modifiedCount) {
+      assertNotLocked(await PlatformStaff.findById(staff._id).select('lockedUntil').session(session), lockedMessage);
+      throw invalidLogin();
+    }
     await PlatformSession.create([{ staffId: staff._id, tokenHash: tokenHash(token), expiresAt }], { session });
     await PlatformAudit.create([{
       staffId: staff._id, staffName: staff.name, action: 'auth.login', outcome: 'succeeded', status: 200,

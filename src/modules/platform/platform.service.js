@@ -6,6 +6,7 @@ const User = require('../tenant/users/user.model');
 const AuthSession = require('../tenant/auth/session.model');
 const { preparePasswordReset, deliverPasswordReset } = require('../tenant/auth/auth.service');
 const { sanitizeUser } = require('../tenant/users/user.util');
+const { limitsFor, withTeamChange, assertMemberChange, setTeamLimits } = require('../tenant/users/team-capacity');
 const RawMaterial = require('../raw_material/raw_material/raw.material.model');
 const {
   createMaterialTransaction, reverseMaterialTransactionById,
@@ -21,10 +22,11 @@ const toPage = async (query, cursor) => {
   return { items, nextCursor: rows.length > pageSize ? String(items.at(-1)._id) : null };
 };
 
-const TENANT_FIELDS = 'tenantId name status accessMode paidUntil billingNote';
+const TENANT_FIELDS = 'tenantId name status accessMode paidUntil billingNote teamLimits';
 const tenantView = (tenant) => ({
   tenantId: tenant.tenantId, name: tenant.name, status: tenant.status, access: accessLevel(tenant),
   paidUntil: tenant.paidUntil ?? null, billingNote: tenant.billingNote ?? '',
+  teamLimits: limitsFor(tenant),
 });
 
 const readTenant = async (tenantId, session) => {
@@ -76,15 +78,14 @@ const setAccess = async (tenantId, level, session) => {
   return tenantView(tenant);
 };
 
-/** Records when the manual subscription is paid until, with an internal note. Never shown to the company. */
-const setBilling = async (tenantId, { paidUntil, billingNote }, session) => {
-  const tenant = await Tenant.findOne({ tenantId }).select(TENANT_FIELDS).session(session);
-  if (!tenant) throw new AppError(404, 'Company workspace not found.');
-  tenant.paidUntil = paidUntil ? new Date(paidUntil + 'T00:00:00Z') : null;
-  tenant.billingNote = billingNote ?? '';
-  await tenant.save({ session });
-  return tenantView(tenant);
-};
+const setBilling = (tenantId, { paidUntil, billingNote, teamLimits }, session) =>
+  withTeamChange(tenantId, async (tenant, activeSession) => {
+    if (teamLimits) await setTeamLimits(tenant, teamLimits, activeSession);
+    tenant.paidUntil = paidUntil ? new Date(paidUntil + 'T00:00:00Z') : null;
+    tenant.billingNote = billingNote ?? '';
+    await tenant.save({ session: activeSession });
+    return tenantView(tenant);
+  }, { session });
 
 const loadUser = async (tenantId, userId, session) => {
   const user = await User.findOne({ tenantId, userId }).session(session);
@@ -99,28 +100,27 @@ const invalidateSessions = async (user, session) => {
   return sanitizeUser(user);
 };
 
-const changeUser = async ({ tenantId, userId, status, session }) => {
-  const user = await loadUser(tenantId, userId, session);
-  if (user.status === status) return sanitizeUser(user);
-  if (status) user.status = status;
-  return invalidateSessions(user, session);
-};
+const changeUser = ({ tenantId, userId, status, session }) =>
+  withTeamChange(tenantId, async (tenant, activeSession) => {
+    const user = await loadUser(tenantId, userId, activeSession);
+    if (user.status === status) return sanitizeUser(user);
+    await assertMemberChange(tenant, user, { status }, activeSession);
+    if (status) user.status = status;
+    return invalidateSessions(user, activeSession);
+  }, { session });
 
 /** Lets support restore admin access when a company's only administrator can no longer sign in. */
-const changeRole = async ({ tenantId, userId, role, session }) => {
-  const user = await loadUser(tenantId, userId, session);
-  if (user.role === role) return sanitizeUser(user);
-  if (role === 'admin' && (user.status !== 'active' || !user.emailVerified)) {
-    throw new AppError(409, 'Only an active user with a verified email can become an administrator.');
-  }
-  if (role === 'employee' && !await User.exists({
-    tenantId, role: 'admin', status: 'active', userId: { $ne: userId },
-  }).session(session)) {
-    throw new AppError(409, 'Make another user an administrator before removing this one.');
-  }
-  user.role = role;
-  return invalidateSessions(user, session);
-};
+const changeRole = ({ tenantId, userId, role, session }) =>
+  withTeamChange(tenantId, async (tenant, activeSession) => {
+    const user = await loadUser(tenantId, userId, activeSession);
+    if (user.role === role) return sanitizeUser(user);
+    if (role === 'admin' && (user.status !== 'active' || !user.emailVerified)) {
+      throw new AppError(409, 'Only an active user with a verified email can become an administrator.');
+    }
+    await assertMemberChange(tenant, user, { role }, activeSession);
+    user.role = role;
+    return invalidateSessions(user, activeSession);
+  }, { session });
 
 const requestRecovery = async (tenantId, userId, session) => {
   const user = await loadUser(tenantId, userId, session);

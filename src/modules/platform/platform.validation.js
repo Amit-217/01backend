@@ -21,9 +21,9 @@ const status = context.extend({ status: z.enum(['active', 'inactive']) });
 const role = context.extend({ role: z.enum(['admin', 'employee']) });
 const access = context.extend({ access: z.enum(['full', 'read_only', 'suspended']) });
 const billing = context.extend({
-  paidUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Enter the date as YYYY-MM-DD.')
-    .refine((value) => !Number.isNaN(Date.parse(value + 'T00:00:00Z')), 'Enter a real date.').nullable(),
+  paidUntil: z.iso.date('Enter a real date in YYYY-MM-DD format.').nullable(),
   billingNote: z.string().trim().max(500).optional(),
+  teamLimits: z.strictObject({ admin: z.int().min(1), employee: z.int().min(0) }).optional(),
 });
 const directionAndQuantity = {
   direction: z.enum(['IN', 'OUT']),

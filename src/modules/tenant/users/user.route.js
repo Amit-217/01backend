@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { createUser, listUsers, getUserById, updateUser, deleteUser } = require('./user.controller');
+const { createUser, listUsers, getTeamCapacity, getUserById, updateUser, deleteUser } = require('./user.controller');
 const { employeeCreateValidation } = require('./user.validation');
 const authenticate = require('../../../common/middlewares/authenticate');
 const authorizeAdmin = require('../../../common/middlewares/authorizeAdmin');
@@ -24,6 +24,7 @@ const employeeUpdateValidation = z.object({
 // Team management is admin-only, including reads: employees must not list colleagues' contact details.
 router.post('/', authenticate, authorizeAdmin, validate(employeeCreateValidation), createUser);
 router.get('/', authenticate, authorizeAdmin, listUsers);
+router.get('/capacity', authenticate, authorizeAdmin, getTeamCapacity);
 router.get('/:id', authenticate, authorizeAdmin, getUserById);
 router.patch('/:id', authenticate, authorizeAdmin, validate(employeeUpdateValidation), updateUser);
 router.delete('/:id', authenticate, authorizeAdmin, deleteUser);

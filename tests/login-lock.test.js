@@ -1,46 +1,61 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const {
-  MAX_FAILURES, LOCK_MS, assertNotLocked, recordFailure, clearFailures, isLocked,
-} = require('../src/common/utils/loginLock');
+const { randomUUID } = require('node:crypto');
+const mongoose = require('mongoose');
+const User = require('../src/modules/tenant/users/user.model');
+const { MAX_FAILURES, LOCK_MS, assertNotLocked, recordFailure, clearFailures, isLocked } =
+  require('../src/common/utils/loginLock');
 
-// Minimal stand-in for a Mongoose model holding one account document.
-const fakeModel = (doc) => ({
-  doc,
-  findOneAndUpdate(_filter, update) {
-    if (update.$inc) doc.failedLoginCount += update.$inc.failedLoginCount;
-    Object.assign(doc, update.$set);
-    return { select: async () => ({ failedLoginCount: doc.failedLoginCount }) };
-  },
-  async updateOne(_filter, update) { Object.assign(doc, update.$set); },
-});
-const account = () => ({ _id: 'a1', failedLoginCount: 0, lastFailedLoginAt: null, lockedUntil: null });
-
-test('the tenth failed attempt within ten minutes locks the account for ten minutes', async () => {
-  assert.equal(MAX_FAILURES, 10);
-  assert.equal(LOCK_MS, 10 * 60 * 1000);
-  const model = fakeModel(account());
-  for (let attempt = 1; attempt < MAX_FAILURES; attempt += 1) {
-    assert.equal(await recordFailure(model, { ...model.doc }), false, `attempt ${attempt} must not lock`);
-  }
-  assert.equal(await recordFailure(model, { ...model.doc }), true);
-  assert.ok(isLocked(model.doc));
-  const remaining = model.doc.lockedUntil.getTime() - Date.now();
-  assert.ok(remaining > 9 * 60_000 && remaining <= LOCK_MS);
-  assert.equal(model.doc.failedLoginCount, 0, 'The count restarts once the lock is set');
-  assert.throws(() => assertNotLocked(model.doc), (error) => error.statusCode === 429 && /reset your password/.test(error.message));
-});
-
-test('failures older than the window start a fresh count', async () => {
-  const model = fakeModel({ ...account(), failedLoginCount: 9, lastFailedLoginAt: new Date(Date.now() - LOCK_MS - 1000) });
-  assert.equal(await recordFailure(model, { ...model.doc }), false);
-  assert.equal(model.doc.failedLoginCount, 1);
-});
-
-test('a successful sign-in clears the count, and an expired lock no longer blocks', async () => {
-  const model = fakeModel({ ...account(), failedLoginCount: 4, lastFailedLoginAt: new Date() });
-  await clearFailures(model, { ...model.doc });
-  assert.equal(model.doc.failedLoginCount, 0);
+test('expired locks allow sign-in and active locks report the remaining time', () => {
   assert.doesNotThrow(() => assertNotLocked({ lockedUntil: new Date(Date.now() - 1000) }));
-  assert.throws(() => assertNotLocked({ lockedUntil: new Date(Date.now() + 60_000) }, 'Generic'), { message: 'Generic' });
+  const locked = { lockedUntil: new Date(Date.now() + 60_000) };
+  assert.throws(() => assertNotLocked(locked, 'Generic'), { message: 'Generic' });
+  assert.throws(() => assertNotLocked(locked), (error) => error.statusCode === 429 && /reset your password/.test(error.message));
+});
+
+const mongoUri = process.env.TEST_MONGO_URI;
+test('concurrent failed sign-ins count within the rolling window and set one lock', {
+  skip: !mongoUri && 'Set TEST_MONGO_URI to check the MongoDB update.',
+  timeout: 45_000,
+}, async () => {
+  const dbName = 'viplora_login_lock_test_' + randomUUID().replaceAll('-', '');
+  try {
+    await mongoose.connect(mongoUri, { dbName, serverSelectionTimeoutMS: 5_000 });
+    const account = await User.create({
+      tenantId: 'tenant-a', userId: 'user-a', firstName: 'Tester', email: 'login@example.test',
+      role: 'employee', password: 'fixture',
+    });
+    const read = () => User.findById(account._id).lean();
+
+    await Promise.all(Array.from({ length: MAX_FAILURES - 1 }, () => recordFailure(User, account)));
+    assert.equal((await read()).failedLoginAttempts.length, MAX_FAILURES - 1);
+    assert.equal(await recordFailure(User, account), true);
+    const locked = await read();
+    assert.ok(isLocked(locked));
+    assert.ok(locked.lockedUntil.getTime() > Date.now() + 9 * 60_000);
+    assert.equal(await recordFailure(User, account), true);
+    assert.deepEqual((await read()).lockedUntil, locked.lockedUntil);
+    await assert.rejects(clearFailures(User, account), { statusCode: 429 });
+
+    await User.updateOne({ _id: account._id }, { $set: {
+      lockedUntil: new Date(Date.now() - 1000),
+      failedLoginAttempts: [new Date(Date.now() - LOCK_MS - 1000), new Date(Date.now() - 1000)],
+    } });
+    assert.equal(await recordFailure(User, account), false);
+    assert.equal((await read()).failedLoginAttempts.length, 2);
+    await clearFailures(User, account);
+    assert.deepEqual((await read()).failedLoginAttempts, []);
+
+    await User.updateOne({ _id: account._id }, {
+      $unset: { failedLoginAttempts: '' },
+      $set: { failedLoginCount: MAX_FAILURES - 1, lastFailedLoginAt: new Date() },
+    });
+    assert.equal(await recordFailure(User, account), true, 'Older records keep their recent count');
+  } finally {
+    try {
+      if (mongoose.connection.readyState === 1 && mongoose.connection.name === dbName) await mongoose.connection.dropDatabase();
+    } finally {
+      await mongoose.disconnect();
+    }
+  }
 });

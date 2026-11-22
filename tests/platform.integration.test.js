@@ -53,7 +53,7 @@ test('tenant transaction audit and staff TOTP support workflows enforce scope an
       .map((model) => model.init()));
 
     await Tenant.create([
-      { tenantId, name: 'Test Company A', email: 'company-a@example.test', status: 'active' },
+      { tenantId, name: 'Test Company A', email: 'company-a@example.test', status: 'active', teamLimits: { admin: 1, employee: 1 } },
       { tenantId: otherTenantId, name: 'Test Company B', email: 'company-b@example.test', status: 'active' },
     ]);
     const passwordHash = await hashPassword(password);

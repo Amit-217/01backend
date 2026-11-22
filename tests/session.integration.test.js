@@ -68,7 +68,7 @@ test('phone and browser sessions rotate independently and logout is scoped', {
     assert.equal(tenant.body.data.tenantId, tenantId);
     assert.equal(tenant.body.data.name, 'Session Test Company');
     assert.deepEqual(Object.keys(tenant.body.data).sort(), [
-      'createdAt', 'email', 'emailVerified', 'name', 'status', 'tenantId', 'updatedAt',
+      'access', 'createdAt', 'email', 'emailVerified', 'name', 'status', 'support', 'tenantId', 'updatedAt',
     ]);
 
     const rejected = await browser(api.post('/api/auth/refresh-token'), 'https://unapproved.example')

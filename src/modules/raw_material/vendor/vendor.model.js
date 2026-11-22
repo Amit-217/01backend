@@ -24,6 +24,7 @@ const vendorSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    emailKey: { type: String, select: false },
 
     address: {
       type: String,
@@ -43,6 +44,7 @@ const vendorSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { transform(_vendor, fields) { delete fields.emailKey; return fields; } },
   }
 );
 
@@ -50,6 +52,13 @@ const vendorSchema = new mongoose.Schema(
 vendorSchema.index(
   { tenantId: 1, name: 1 },
   { unique: true }
+);
+
+// Legacy duplicates can remain readable while support resolves them. New email assignments
+// reserve a normalized key, and the service checks legacy email fields before assigning one.
+vendorSchema.index(
+  { tenantId: 1, emailKey: 1 },
+  { unique: true, partialFilterExpression: { emailKey: { $type: 'string' } } }
 );
 
 const Vendor = mongoose.model(

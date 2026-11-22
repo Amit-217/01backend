@@ -177,7 +177,7 @@ Native clients also receive a JSON refresh token. Browsers send `X-Viplora-Clien
 
 ## 5) Employee flow
 
-After admin login, an admin can invite employees, share admin rights, and deactivate or reactivate employees. Team reads are admin-only. A company should keep at least two administrators so access survives one person leaving. If a company loses all its administrators, platform support can restore one with `/users/:userId/role`, subject to the case-reference and audit rules in [PLATFORM.md](PLATFORM.md).
+After signup, the owner can open Team with the first admin seat. A Viplora platform operator sets the company's admin and employee limits under Billing. Team reads are admin-only and show active usage against both limits. An invitation, reactivation, or role change that adds a seat requires room under the corresponding limit. If a company loses its admin access, an operator can restore it through the case-referenced workflow. [Platform runbook](PLATFORM.md)
 
 ### Step 5.1: Invite employee
 Endpoint:
@@ -233,7 +233,7 @@ This sets:
 A missing password for an invited employee returns 400 and leaves the code valid. Only after verification can the employee log in.
 
 ### Step 5.3: Deactivate, reactivate, and roles
-- `DELETE /api/users/:id` deactivates an employee and revokes their sessions. `GET /api/users?status=inactive` lists deactivated people. `PATCH /api/users/:id` with `{ "status": "active" }` restores them.
+- `DELETE /api/users/:id` deactivates an employee, releases the seat, and revokes their sessions. `GET /api/users?status=inactive` lists deactivated people. `PATCH /api/users/:id` with `{ "status": "active" }` restores them if a seat is available. An employee with an unverified email requests a fresh setup code.
 - `PATCH /api/users/:id` with `{ "role": "admin" }` promotes an active, verified employee. `{ "role": "employee" }` removes another admin's rights. Nobody changes their own role or status.
 
 ---

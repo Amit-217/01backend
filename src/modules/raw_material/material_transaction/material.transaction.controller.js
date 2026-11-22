@@ -4,9 +4,11 @@ const {
   listMaterialTransactions,
   createMaterialTransaction,
   getMaterialTransactionById,
+  getMovementSubmission,
   reverseMaterialTransactionById,
 } = require('./material.transaction.service');
 const { tenantActorFields, listMovementAudit, getMovementAudit, listMovementActors } = require('./movement.audit');
+const { listMovementHistory } = require('./movement.history');
 
 const createTransaction = asyncHandler(async (req, res) => {
   const transaction = await createMaterialTransaction({
@@ -23,6 +25,16 @@ const createTransaction = asyncHandler(async (req, res) => {
 const listTransactions = asyncHandler(async (req, res) => {
   const transactions = await listMaterialTransactions(req.user.tenantId, req.query);
   return sendSuccess(res, 200, 'Material transactions retrieved successfully.', transactions);
+});
+
+const listHistory = asyncHandler(async (req, res) =>
+  sendSuccess(res, 200, 'Material movement history retrieved.', await listMovementHistory(req.user.tenantId, req.query)));
+
+const getSubmission = asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const movement = await getMovementSubmission(req.user.tenantId, req.user.userId, req.params.key);
+  if (!movement) return sendError(res, 404, 'No saved movement was found for this submission.');
+  return sendSuccess(res, 200, 'Stock movement saved.', movement);
 });
 
 const getTransaction = asyncHandler(async (req, res) => {
@@ -58,6 +70,8 @@ const listActors = asyncHandler(async (req, res) =>
 module.exports = {
   createTransaction,
   listTransactions,
+  listHistory,
+  getSubmission,
   getTransaction,
   reverseTransaction,
   listAudit,

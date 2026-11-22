@@ -192,6 +192,12 @@
 - Admin required
 - Returns the current tenant's administrators and employees with the given status (default `active`), administrators first.
 
+### Team capacity
+
+- `GET /api/users/capacity` requires a company administrator and returns `{ limits: { admin, employee }, usage: { admin, employee } }` for that company.
+- A `null` limit means platform staff have yet to configure it. Usage includes each active account in its current role, including pending employee invitations.
+- Signup creates the first administrator. Existing accounts keep access. Inviting, reactivating, or changing roles into a seat requires an available seat. A missing limit or a full role returns 409. Deactivation releases the seat.
+
 ### Get user by ID
 - Method: GET
 - Route: `/api/users/:id`
@@ -206,6 +212,7 @@
 - Admin required
 - Use the user's `userId` for `:id`.
 - Reactivate an employee with `{ "status": "active" }`.
+- After reactivation an employee with an unverified email requests a fresh code from account setup.
 - Promote or demote with `{ "role": "admin" | "employee" }`.
 - Rules:
   - Nobody can change their own role or status.
@@ -311,11 +318,13 @@ Deactivation is a soft delete; send `{ "isActive": true }` in a PATCH to reactiv
 - Body fields are `code`, `name`, `categoryId`, `unit`, `minimumStock`, and `isActive`. The validator strips `currentStock`. Use the ledger API to change stock.
 - Moving to a different category requires that category to be active.
 - `unit` cannot change once the material has stock movements (409).
+- Changing `isActive` to `false` requires zero stock (409 otherwise).
 
 ### Deactivate raw material
 - Method: DELETE
 - Route: `/api/v1/raw-materials/:id`
 - Auth: admin
+- A material must have zero stock before it can be archived.
 
 ### List vendors
 - Method: GET
@@ -358,13 +367,23 @@ Deactivation is a soft delete; send `{ "isActive": true }` in a PATCH to reactiv
 - Route: `/api/v1/material-transactions`
 - Auth: required
 - Query accepts an optional `rawMaterialId`. A nonempty value must be a valid ObjectId. An empty value uses the unfiltered list.
+- This endpoint returns the legacy array. Use the paged history endpoint for new integrations.
+
+### Paged movement history
+
+Both company roles can call `GET /api/v1/material-transactions/history`. The response contains `{ items, nextCursor }`. The default page size is 25 and the maximum is 50. Pass the returned cursor with the same filters to load older entries. Filter by `rawMaterialId`, movement `type`, inclusive UTC `from` and `to` dates, or `search` (material name/code, vendor name, supplier reference, notes, and reason). Each entry carries its recorded `stockUnit` when available. Older entries can fall back to the material unit. `reversedBy` identifies an existing reversal even when it is on a different page.
+
+### Recover a stock submission
+
+`GET /api/v1/material-transactions/submissions/:key` returns the saved movement for the authenticated company and acting user, or 404 when that key has no saved movement for them. After a lost response, retain the same key and request body and check this endpoint or replay the original POST.
 
 ### Create material transaction
 - Method: POST
 - Route: `/api/v1/material-transactions`
-- Auth: required; `type: "ADJUSTMENT"` requires an admin
+- Auth: required. `ADJUSTMENT` and `OPENING` require an admin.
 - The optional `Idempotency-Key` uses 1–128 of `A-Z a-z 0-9 . _ : -` and is scoped to the tenant and acting user. A retry with the same key and payload returns the original movement. A different payload with that key returns 409.
-- Rules: `IN` uses direction `IN`; `CONSUMPTION` uses `OUT`; `ADJUSTMENT` may use either and requires a `reason`. `vendorId` and `rate` are accepted only on `IN`, and the vendor must be active. Stock cannot go below zero.
+- `IN` uses direction `IN` and reference type `PURCHASE`. `CONSUMPTION` uses direction `OUT` and `DIRECT_CONSUMPTION` or `PRODUCTION`. `ADJUSTMENT` allows either direction, uses reference type `ADJUSTMENT`, and requires a `reason`. `OPENING` uses direction `IN` and reference type `OPENING`. It requires a material with zero stock and no prior movements.
+- `vendorId` and `rate` apply to receipts. The vendor must be active. `reference` is an optional supplier reference of up to 120 characters. `date` accepts a valid UTC calendar date (`YYYY-MM-DD`) or an ISO timestamp with a timezone. Provide the form's `expectedUnit` so that a stale unit returns 409. Stock cannot go below zero.
 - Body:
   ```json
   {
@@ -372,9 +391,12 @@ Deactivation is a soft delete; send `{ "isActive": true }` in a PATCH to reactiv
     "type": "IN",
     "direction": "IN",
     "quantity": 25,
+    "expectedUnit": "kg",
     "rate": 120,
     "vendorId": "66c2f2e2d9d87f1a12345679",
     "referenceType": "PURCHASE",
+    "reference": "CHALLAN-1042",
+    "date": "2026-11-20",
     "reason": "Monthly purchase",
     "notes": "Arrival from vendor"
   }
@@ -390,6 +412,7 @@ Deactivation is a soft delete; send `{ "isActive": true }` in a PATCH to reactiv
 - Route: `/api/v1/material-transactions/:id/reverse`
 - Auth: admin
 - The API writes a linked adjustment and retains the original. Repeating the request returns the existing reversal. A reversal cannot be reversed.
+- Restore an archived material before making a new reversal. A mismatch between the recorded and current units also returns 409.
 
 Stock history is append-only: movements cannot be deleted. Use a reversal to correct a mistake.
 
@@ -420,6 +443,8 @@ All endpoints use tenant authentication. Tenant admins manage the catalog. Emplo
 | POST | `/api/v1/finished-goods/skus` | Create a SKU with `productId`, `code`, optional `size` and `colour` |
 | PATCH | `/api/v1/finished-goods/skus/:id` | Update `code`, `size`, `colour`, or `isActive` |
 | GET | `/api/v1/finished-goods/movements` | List ordinary finished-goods history |
+| GET | `/api/v1/finished-goods/movements/filter-options` | List active and archived product and SKU labels for history filters, without balances |
+| GET | `/api/v1/finished-goods/movements/submissions/:key` | Find a saved movement by the signed-in user's idempotency key |
 | GET | `/api/v1/finished-goods/movements/:id` | Read ordinary movement details |
 | GET | `/api/v1/finished-goods/movements/audit` | List detailed history as tenant admin |
 | GET | `/api/v1/finished-goods/movements/audit/actors` | List actor IDs and labels as tenant admin |
@@ -427,11 +452,15 @@ All endpoints use tenant authentication. Tenant admins manage the catalog. Emplo
 | POST | `/api/v1/finished-goods/movements` | Record a movement with an `Idempotency-Key` |
 | POST | `/api/v1/finished-goods/movements/:id/reverse` | Append or retrieve a reversal as tenant admin. Supply `reason`. |
 
-SKU codes are normalized to uppercase and unique within a company, including archived codes. Each SKU inherits the product unit. Product units and SKU parent products are fixed after creation. A SKU must have zero stock to be archived. Archive a product after archiving its active SKUs. Restore the product first when bringing a SKU back. Admin reads include archived catalog entries.
+SKU codes are normalized to uppercase and unique within a company. Once assigned, a code remains reserved for that SKU. SKU responses include previous known codes in `aliases`. Each SKU inherits the product unit. Product units and SKU parent products are fixed after creation. New product names must be unique for the same stock unit. Active variants with a size or colour must be unique within their product. Both rules ignore casing and collapse whitespace. Size and colour can only receive formatting changes once a SKU has stock or movement history. A SKU must have zero stock to be archived. Archive a product after archiving its active SKUs. Restore the product first when bringing a SKU back. Admin catalog reads include archived entries.
 
-Send `skuId`, `type`, and `quantity` for a movement. Optional fields are `date` in `YYYY-MM-DD` UTC form, `reference`, and `notes`. Omit the date to record the current timestamp. `RECEIPT` and `RETURN` increase stock. `DISPATCH` decreases it. An admin can record `OPENING` with a reason before the first movement, or an `ADJUSTMENT` with `direction` and `reason`. Quantities range from 0.0001 to 1,000,000,000,000. Movement keys are scoped to tenant and actor, and conflicting reuse returns 409. Archive, opening-balance, and reversal conflicts also return 409. A stock decrease beyond the available balance returns 400.
+Send `skuId`, `type`, and `quantity` for a movement. Optional fields are `date` in `YYYY-MM-DD` UTC form, `reference`, and `notes`. Omit the date to record the current timestamp. `RECEIPT` and `RETURN` increase stock. `DISPATCH` decreases it. An admin can record `OPENING` with a reason before the first movement, or an `ADJUSTMENT` with `direction` and `reason`. Quantities range from 0.0001 to 1,000,000,000,000. New movements for `pcs` SKUs require whole pieces. A stock decrease beyond the available balance returns 400.
 
-History returns `{ items, nextCursor }` with optional `productId`, `skuId`, `type`, inclusive UTC `from` and `to` dates, `cursor`, and `limit` (1–50, default 25). Admin audit adds `actorId` and includes the recorded actor and before-and-after balances. Movement rows snapshot the product name, SKU code, variant, and unit so later catalog changes preserve historical labels. The finished-goods ledger is independent of raw-material consumption.
+For a `RETURN`, send the original `dispatchId` or a non-empty `reference` for a dispatch recorded elsewhere. A linked dispatch must belong to the same company and SKU and be unreversed. Its unreversed returns cannot exceed the original dispatched quantity. Reverse linked returns before reversing their dispatch. External references are recorded for traceability without a Viplora dispatch quantity to reconcile.
+
+Movement keys are scoped to tenant and actor. When save status is uncertain, look up the original key or repeat the same body with that key. The lookup returns 404 until the movement exists in the caller's scope. Conflicting key reuse, duplicate catalog identities, archive conflicts, and invalid correction state return 409.
+
+History returns `{ items, nextCursor }` with optional `productId`, `skuId`, `type`, inclusive UTC `from` and `to` movement dates, `search` (reference, product, SKU snapshot, or notes), `order` (`movement` by default or `posted`), `cursor`, and `limit` (1–50, default 25). Admin audit adds `actorId` and includes the recorded actor and before-and-after balances. The balance snapshots reflect posting order even when a movement date is backdated. Movement rows snapshot the product name, SKU code, variant, and unit so later catalog changes preserve historical labels. The finished-goods ledger is independent of raw-material consumption.
 
 ## Platform support
 
@@ -444,6 +473,7 @@ All paths below use the `/api/platform` prefix. Sign-in takes `{ email, password
 | GET | `/tenants` | List companies, optionally using `lookup` for exact ID or name |
 | GET | `/audit` | Platform-wide activity outside a selected company |
 | GET | `/tenants/:tenantId` | Company summary |
+| GET | `/tenants/:tenantId/team-capacity` | Subscription limits and active seat counts for the selected company |
 | GET | `/tenants/:tenantId/users` | List company users and their access status |
 | GET | `/tenants/:tenantId/materials` | List materials and balances for repair selection |
 | GET | `/tenants/:tenantId/stock` | Transaction log with tenant audit filters and pagination |
@@ -453,6 +483,8 @@ All paths below use the `/api/platform` prefix. Sign-in takes `{ email, password
 | GET | `/tenants/:tenantId/finished-goods/skus` | Finished balances, optionally filtered by `productId` |
 | GET | `/tenants/:tenantId/finished-goods/movements` | Finished-goods audit with the admin history filters |
 | GET | `/tenants/:tenantId/finished-goods/movements/actors` | Actor options for finished-goods audit |
+| GET | `/tenants/:tenantId/finished-goods/movements/filter-options` | Active and archived product and SKU filter labels |
+| GET | `/tenants/:tenantId/finished-goods/movements/submissions/:key` | Recover the signed-in operator's finished adjustment for that company |
 | GET | `/tenants/:tenantId/finished-goods/movements/:id` | Finished-goods movement detail |
 | GET | `/tenants/:tenantId/audit` | Company-specific platform events |
 | GET | `/tenants/:tenantId/changes` | Repair and recovery requests |
@@ -468,10 +500,10 @@ All interventions are POST requests under `/tenants/:tenantId`. Include `caseRef
 | `/finished-goods/movements/:id/reverse` | Append or retrieve a finished-goods reversal |
 | `/finished-goods/movements/adjustment` | Supply `skuId`, matching `correctionOf`, `direction`, `quantity`, and the `Idempotency-Key` header |
 | `/access` | Set `access` to `full`, `read_only`, or `suspended` (manual subscription control). Suspended revokes all company sessions |
-| `/billing` | Set `paidUntil` (`YYYY-MM-DD` or `null`) and an optional `billingNote` (up to 500 characters). Internal to staff. The console flags the company as Overdue after the date. Access never changes automatically |
+| `/billing` | Set `paidUntil` (a real date in `YYYY-MM-DD` or `null`), an optional internal `billingNote` (up to 500 characters), and optional `teamLimits` with integer `admin` (at least 1) and `employee` (at least 0) values. Limits below active usage return 409. Access stays under manual control |
 | `/status` | Older endpoint: set workspace `status` to `inactive` or `active`. Prefer `/access` |
-| `/users/:userId/status` | Set user `status` to `inactive` or `active` |
-| `/users/:userId/role` | Set user `role` to `admin` or `employee` (restores admin access for a locked-out company). Promoting needs an active user with a verified email. Removing the last active administrator returns 409. Revokes that user's sessions |
+| `/users/:userId/status` | Set user `status` to `inactive` or `active`. Reactivation requires a free seat. Suspending the last active administrator returns 409 |
+| `/users/:userId/role` | Set user `role` to `admin` or `employee`. Promoting requires an active user with a verified email. A change that adds a seat requires room in the destination role. Removing the last active administrator returns 409. Revokes that user's sessions |
 | `/users/:userId/revoke-sessions` | Invalidate all sessions for the selected user |
 | `/users/:userId/request-recovery` | Send a password-reset code to the existing verified inbox |
 | `/changes/stock` | Preview 2–25 `lines` with distinct `rawMaterialId`, `direction`, and `quantity` |

@@ -2,17 +2,11 @@ const { z } = require('zod');
 const MaterialTransaction = require('./material.transaction.model');
 const User = require('../../tenant/users/user.model');
 const { AppError } = require('../../../common/utils/errors');
+const { objectId, movementFilters, movementFilter, movementPage } = require('./movement.query');
 
 const PLATFORM_ACTOR = 'platform-support';
-const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'Expected a MongoDB ObjectId.');
-const auditQuery = z.strictObject({
-  rawMaterialId: objectId.optional(),
+const auditQuery = movementFilters.extend({
   actorId: z.string().trim().min(1).max(128).optional(),
-  type: z.enum(['IN', 'CONSUMPTION', 'ADJUSTMENT']).optional(),
-  from: z.iso.date().optional(),
-  to: z.iso.date().optional(),
-  cursor: z.string().regex(/^(?:\d{4}|[+-]\d{6})-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z_[a-f\d]{24}$/).optional(),
-  limit: z.string().regex(/^[1-9]\d?$/).transform(Number).pipe(z.number().max(50)).optional(),
 });
 
 const userName = (user) => [user.firstName, user.lastName].filter(Boolean).join(' ');
@@ -56,29 +50,11 @@ const readAuditRows = async (tenantId, query, limit) => {
 const listMovementAudit = async (tenantId, input) => {
   const parsed = auditQuery.safeParse(input);
   if (!parsed.success) throw new AppError(400, parsed.error.issues[0].message);
-  const { rawMaterialId, actorId, type, from, to, cursor, limit = 25 } = parsed.data;
-  if (from && to && from > to) throw new AppError(400, 'Start date must be on or before end date.');
-  const query = {};
-  if (rawMaterialId) query.rawMaterialId = rawMaterialId;
+  const { actorId, limit = 25 } = parsed.data;
+  const query = movementFilter(parsed.data);
   if (actorId) query.createdBy = actorId;
-  if (type) query.type = type;
-  if (from || to) {
-    query.date = {};
-    if (from) query.date.$gte = new Date(from + 'T00:00:00.000Z');
-    if (to) query.date.$lte = new Date(to + 'T23:59:59.999Z');
-  }
-  if (cursor) {
-    const [value, id] = cursor.split('_');
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
-      throw new AppError(400, 'Invalid movement cursor.');
-    }
-    query.$or = [{ date: { $lt: date } }, { date, _id: { $lt: id } }];
-  }
   const rows = await readAuditRows(tenantId, query, limit + 1);
-  const items = rows.slice(0, limit);
-  const last = items.at(-1);
-  return { items, nextCursor: rows.length > limit ? last.date.toISOString() + '_' + last._id : null };
+  return movementPage(rows, limit);
 };
 
 const getMovementAudit = async (tenantId, id) => {

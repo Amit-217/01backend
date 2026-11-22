@@ -6,6 +6,7 @@ const { sendSuccess } = require('../../common/utils/response');
 const { PlatformStaff, PlatformSession, PlatformAudit } = require('./platform.model');
 const { loginPlatform, authenticatePlatform } = require('./platform.auth');
 const service = require('./platform.service');
+const { readTeamCapacity } = require('../tenant/users/team-capacity');
 const rules = require('./platform.validation');
 const { PLATFORM_ACTOR, listMovementAudit, getMovementAudit, listMovementActors } = require('../raw_material/material_transaction/movement.audit');
 const finishedCatalog = require('../finished_goods/product.service');
@@ -65,6 +66,10 @@ const operation = (action, execute, { body, query, write = false, operator = wri
         if (req.body.role) event.details = 'Requested role ' + req.body.role;
         if (req.body.access) event.details = 'Requested access ' + req.body.access;
         if ('paidUntil' in req.body) event.details = 'Paid until ' + (req.body.paidUntil || 'not set');
+        if (req.body.teamLimits) {
+          const { admin, employee } = req.body.teamLimits;
+          event.details += ` · Team limits are ${admin} administrators and ${employee} employees`;
+        }
         if (req.body.outcome) event.details = 'Recovery outcome ' + req.body.outcome;
         if (req.body.correctionOf) event.target = req.body.correctionOf;
       }
@@ -104,6 +109,8 @@ router.get('/audit', operation('platform.audit.list', (_req, _session, query) =>
   { query: rules.pageQuery }));
 router.get('/tenants/:tenantId', operation('tenant.view', async (req, session) =>
   service.tenantView(await service.readTenant(req.params.tenantId, session))));
+router.get('/tenants/:tenantId/team-capacity', operation('team.capacity', (req) =>
+  readTeamCapacity(req.params.tenantId)));
 router.get('/tenants/:tenantId/users', operation('users.list', (req, _session, query) =>
   service.listUsers(req.params.tenantId, query), { query: rules.pageQuery }));
 router.get('/tenants/:tenantId/stock', operation('stock.list', (req, _session, query) =>
@@ -122,6 +129,13 @@ router.get('/tenants/:tenantId/finished-goods/movements', operation('finished.mo
   finishedLedger.listMovements(req.params.tenantId, query, true), { query: finishedRules.auditQuery }));
 router.get('/tenants/:tenantId/finished-goods/movements/actors', operation('finished.movements.actors', (req) =>
   finishedLedger.listActors(req.params.tenantId)));
+router.get('/tenants/:tenantId/finished-goods/movements/filter-options', operation('finished.movements.options', (req) =>
+  finishedCatalog.historyOptions(req.params.tenantId)));
+const finishedSupportKey = (req, key) =>
+  finishedLedger.hash(JSON.stringify([String(req.platform.staff._id), finishedLedger.requireKey(key)]));
+router.get('/tenants/:tenantId/finished-goods/movements/submissions/:key', operation('finished.movements.submission', (req) =>
+  finishedLedger.getSubmission(req.params.tenantId, PLATFORM_ACTOR, finishedSupportKey(req, req.params.key), true),
+{ operator: true }));
 router.get('/tenants/:tenantId/finished-goods/movements/:id', operation('finished.movements.view', (req) =>
   finishedLedger.getMovement(req.params.tenantId, finishedRules.parse(finishedRules.objectId, req.params.id), true)));
 router.get('/tenants/:tenantId/audit', operation('tenant.audit.list', (req, _session, query) =>
@@ -143,8 +157,7 @@ router.post('/tenants/:tenantId/finished-goods/movements/:id/reverse', operation
 router.post('/tenants/:tenantId/finished-goods/movements/adjustment', operation('finished.movements.adjust',
   async (req, session) => {
     const { skuId, correctionOf, direction, quantity, reason, caseReference } = req.body;
-    const key = finishedLedger.requireKey(req.get('Idempotency-Key'));
-    const scopedKey = finishedLedger.hash(JSON.stringify([String(req.platform.staff._id), key]));
+    const scopedKey = finishedSupportKey(req, req.get('Idempotency-Key'));
     const entry = await finishedLedger.createMovement(req.params.tenantId, {
       skuId, correctionOf, type: 'ADJUSTMENT', direction, quantity, reason, reference: caseReference,
     }, { createdBy: PLATFORM_ACTOR }, scopedKey, session);

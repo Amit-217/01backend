@@ -43,6 +43,7 @@ test('read-only companies keep reading and lose writes; suspended companies cann
       get: (path) => api.get(path).auth(token, { type: 'bearer' }),
       send: (method, path, body) => api[method](path).auth(token, { type: 'bearer' }).send(body),
     };
+    await Tenant.updateOne({ tenantId }, { $set: { teamLimits: { admin: 1, employee: 1 } } });
     const invited = await as.send('post', '/api/users', { firstName: 'Leaver', email: 'leaver@access.test' }).expect(201);
     const transact = (session) => mongoose.connection.transaction((s) => setAccess(tenantId, session, s));
 
