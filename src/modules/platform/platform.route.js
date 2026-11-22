@@ -63,6 +63,8 @@ const operation = (action, execute, { body, query, write = false, operator = wri
         event.reason = req.body.reason;
         if (req.body.status) event.details = 'Requested status ' + req.body.status;
         if (req.body.role) event.details = 'Requested role ' + req.body.role;
+        if (req.body.access) event.details = 'Requested access ' + req.body.access;
+        if ('paidUntil' in req.body) event.details = 'Paid until ' + (req.body.paidUntil || 'not set');
         if (req.body.outcome) event.details = 'Recovery outcome ' + req.body.outcome;
         if (req.body.correctionOf) event.target = req.body.correctionOf;
       }
@@ -100,8 +102,8 @@ router.get('/tenants', operation('tenants.list', (_req, _session, query) => serv
   { query: rules.directoryQuery }));
 router.get('/audit', operation('platform.audit.list', (_req, _session, query) => service.listAudit(undefined, query),
   { query: rules.pageQuery }));
-router.get('/tenants/:tenantId', operation('tenant.view', (req, session) =>
-  service.readTenant(req.params.tenantId, session)));
+router.get('/tenants/:tenantId', operation('tenant.view', async (req, session) =>
+  service.tenantView(await service.readTenant(req.params.tenantId, session))));
 router.get('/tenants/:tenantId/users', operation('users.list', (req, _session, query) =>
   service.listUsers(req.params.tenantId, query), { query: rules.pageQuery }));
 router.get('/tenants/:tenantId/stock', operation('stock.list', (req, _session, query) =>
@@ -153,6 +155,10 @@ router.post('/tenants/:tenantId/finished-goods/movements/adjustment', operation(
   }) }));
 router.post('/tenants/:tenantId/status', operation('tenant.status', (req, session) =>
   service.setTenantStatus(req.params.tenantId, req.body.status, session), { write: true, body: rules.status }));
+router.post('/tenants/:tenantId/access', operation('tenant.access', (req, session) =>
+  service.setAccess(req.params.tenantId, req.body.access, session), { write: true, body: rules.access }));
+router.post('/tenants/:tenantId/billing', operation('tenant.billing', (req, session) =>
+  service.setBilling(req.params.tenantId, req.body, session), { write: true, body: rules.billing }));
 router.post('/tenants/:tenantId/users/:userId/status', operation('user.status', (req, session) =>
   service.changeUser({ ...req.params, status: req.body.status, session }), { write: true, body: rules.status }));
 router.post('/tenants/:tenantId/users/:userId/role', operation('user.role', (req, session) =>

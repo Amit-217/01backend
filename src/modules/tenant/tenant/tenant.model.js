@@ -48,6 +48,10 @@ const tenantSchema = new mongoose.Schema(
       default: 'pending',
     },
     accessVersion: { type: Number, default: 0 },
+    // Manual subscription billing (see common/utils/workspaceAccess.js). Suspension uses `status: inactive`.
+    accessMode: { type: String, enum: ['full', 'read_only'], default: 'full' },
+    paidUntil: { type: Date, default: null },
+    billingNote: { type: String, default: '', trim: true, maxlength: 500 },
     adminEmail: {
       type: String,
       default: null,

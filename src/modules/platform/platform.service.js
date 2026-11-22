@@ -11,6 +11,7 @@ const {
   createMaterialTransaction, reverseMaterialTransactionById,
 } = require('../raw_material/material_transaction/material.transaction.service');
 const { PLATFORM_ACTOR, objectId } = require('../raw_material/material_transaction/movement.audit');
+const { accessLevel } = require('../../common/utils/workspaceAccess');
 
 const pageSize = 25;
 const toPage = async (query, cursor) => {
@@ -20,14 +21,23 @@ const toPage = async (query, cursor) => {
   return { items, nextCursor: rows.length > pageSize ? String(items.at(-1)._id) : null };
 };
 
+const TENANT_FIELDS = 'tenantId name status accessMode paidUntil billingNote';
+const tenantView = (tenant) => ({
+  tenantId: tenant.tenantId, name: tenant.name, status: tenant.status, access: accessLevel(tenant),
+  paidUntil: tenant.paidUntil ?? null, billingNote: tenant.billingNote ?? '',
+});
+
 const readTenant = async (tenantId, session) => {
-  const tenant = await Tenant.findOne({ tenantId }).select('tenantId name status').session(session || null);
+  const tenant = await Tenant.findOne({ tenantId }).select(TENANT_FIELDS).session(session || null);
   if (!tenant) throw new AppError(404, 'Company workspace not found.');
   return tenant;
 };
 
-const listTenants = ({ lookup, cursor }) => toPage(Tenant.find(lookup
-  ? { $or: [{ tenantId: lookup }, { name: lookup }] } : {}).select('tenantId name status'), cursor);
+const listTenants = async ({ lookup, cursor }) => {
+  const page = await toPage(Tenant.find(lookup ? { $or: [{ tenantId: lookup }, { name: lookup }] } : {})
+    .select(TENANT_FIELDS), cursor);
+  return { ...page, items: page.items.map(tenantView) };
+};
 const listUsers = (tenantId, { cursor }) => toPage(User.find({ tenantId })
   .select('userId firstName lastName role status emailVerified'), cursor);
 const listMaterials = (tenantId) => RawMaterial.find({ tenantId }).select('code name unit currentStock isActive')
@@ -45,6 +55,35 @@ const setTenantStatus = async (tenantId, status, session) => {
     await AuthSession.deleteMany({ tenantId }, { session });
   }
   return { tenantId, name: tenant.name, status: tenant.status };
+};
+
+/**
+ * Manual subscription control. Suspended blocks sign-in and revokes sessions (status inactive);
+ * read-only keeps sessions but refuses changes (accessMode read_only); full restores normal use.
+ */
+const setAccess = async (tenantId, level, session) => {
+  const tenant = await Tenant.findOne({ tenantId }).select(TENANT_FIELDS + ' accessVersion').session(session);
+  if (!tenant) throw new AppError(404, 'Company workspace not found.');
+  if (tenant.status === 'pending') throw new AppError(409, 'This company must finish verification before access can be managed.');
+  const status = level === 'suspended' ? 'inactive' : 'active';
+  if (level !== 'suspended') tenant.accessMode = level;
+  if (tenant.status !== status) {
+    tenant.status = status;
+    tenant.$inc('accessVersion', 1);
+  }
+  await tenant.save({ session });
+  if (status === 'inactive') await AuthSession.deleteMany({ tenantId }, { session });
+  return tenantView(tenant);
+};
+
+/** Records when the manual subscription is paid until, with an internal note. Never shown to the company. */
+const setBilling = async (tenantId, { paidUntil, billingNote }, session) => {
+  const tenant = await Tenant.findOne({ tenantId }).select(TENANT_FIELDS).session(session);
+  if (!tenant) throw new AppError(404, 'Company workspace not found.');
+  tenant.paidUntil = paidUntil ? new Date(paidUntil + 'T00:00:00Z') : null;
+  tenant.billingNote = billingNote ?? '';
+  await tenant.save({ session });
+  return tenantView(tenant);
 };
 
 const loadUser = async (tenantId, userId, session) => {
@@ -201,7 +240,8 @@ const completeRecovery = async (req, session) => {
 };
 
 module.exports = {
-  readTenant, listTenants, listUsers, listMaterials, listAudit, listChanges, setTenantStatus, changeUser, changeRole,
+  readTenant, tenantView, listTenants, listUsers, listMaterials, listAudit, listChanges, setTenantStatus, setAccess,
+  setBilling, changeUser, changeRole,
   requestRecovery,
   recordAdjustment, recordReversal, previewStock, previewRecovery, approveChange, completeRecovery,
 };

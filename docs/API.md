@@ -220,6 +220,18 @@
 - Admin required
 - Employees only. Remove admin rights first.
 
+## Company access (manual subscription billing)
+
+Platform support sets each company to one of three access levels:
+
+| Level | Sign in | Read | Change data |
+|---|---|---|---|
+| `full` | Yes | Yes | Yes |
+| `read_only` | Yes | Yes | No. Every non-GET tenant request returns 403 with `details.code = "WORKSPACE_READ_ONLY"` and a message that includes the support contact. Exceptions: `POST /api/auth/logout`, `DELETE /api/users/:id`, and `PATCH /api/users/:id` with only `{ "status": "inactive" }` (deactivating someone who left) |
+| `suspended` | No. Login returns 403 with a "paused" message and the support contact, and existing sessions end | No | No |
+
+Read-only is enforced inside `authenticate`, so it covers every authenticated tenant route by default. Switching to read-only keeps sessions. Suspending revokes them. Password reset keeps working at every level. The support contact comes from `SUPPORT_NAME`, `SUPPORT_PHONE`, and `SUPPORT_EMAIL`.
+
 ## Tenant endpoints
 
 ### Current tenant
@@ -455,7 +467,9 @@ All interventions are POST requests under `/tenants/:tenantId`. Include `caseRef
 | `/stock/adjustment` | Supply `rawMaterialId`, `correctionOf`, `direction`, `quantity`, and the `Idempotency-Key` header |
 | `/finished-goods/movements/:id/reverse` | Append or retrieve a finished-goods reversal |
 | `/finished-goods/movements/adjustment` | Supply `skuId`, matching `correctionOf`, `direction`, `quantity`, and the `Idempotency-Key` header |
-| `/status` | Set workspace `status` to `inactive` or `active` |
+| `/access` | Set `access` to `full`, `read_only`, or `suspended` (manual subscription control). Suspended revokes all company sessions |
+| `/billing` | Set `paidUntil` (`YYYY-MM-DD` or `null`) and an optional `billingNote` (up to 500 characters). Internal to staff. The console flags the company as Overdue after the date. Access never changes automatically |
+| `/status` | Older endpoint: set workspace `status` to `inactive` or `active`. Prefer `/access` |
 | `/users/:userId/status` | Set user `status` to `inactive` or `active` |
 | `/users/:userId/role` | Set user `role` to `admin` or `employee` (restores admin access for a locked-out company). Promoting needs an active user with a verified email. Removing the last active administrator returns 409. Revokes that user's sessions |
 | `/users/:userId/revoke-sessions` | Invalidate all sessions for the selected user |

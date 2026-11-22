@@ -14,6 +14,8 @@ const { OTP_PURPOSES } = require('./auth.constant');
 const onboarding = require('./onboarding.service');
 const { activeTenant, createSession, rotateSession, revokeSession, revokeUserSessions } = require('./session.service');
 const { LOCK_MS, assertNotLocked, recordFailure, clearFailures, clearedLock } = require('../../../common/utils/loginLock');
+const { suspendedMessage } = require('../../../common/utils/workspaceAccess');
+const Tenant = require('../tenant/tenant.model');
 
 const OTP_TTL = Number(process.env.OTP_EXPIRY || 10) * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
@@ -122,7 +124,10 @@ const loginUser = async ({ email, password }) => {
   if (user.status !== 'active') throw new AppError(403, 'Account is inactive.');
   if (!user.emailVerified) throw new AppError(403, 'Email is not verified.');
   const tenant = await activeTenant(user.tenantId);
-  if (!tenant) throw new AppError(403, 'This company workspace is unavailable.');
+  if (!tenant) {
+    const suspended = await Tenant.exists({ tenantId: user.tenantId, status: 'inactive' });
+    throw new AppError(403, suspended ? suspendedMessage() : 'This company workspace is unavailable.');
+  }
   return sessionResponse(await createSession(user, tenant));
 };
 

@@ -13,7 +13,7 @@ const findActiveUser = (userId, tenantId) => User.findOne({
   userId, tenantId, status: 'active', emailVerified: true,
 });
 
-const activeTenant = (tenantId) => Tenant.findOne({ tenantId, status: 'active' }).select('accessVersion');
+const activeTenant = (tenantId) => Tenant.findOne({ tenantId, status: 'active' }).select('accessVersion accessMode');
 
 const findSessionUser = async (session) => {
   const [user, tenant] = await Promise.all([
@@ -22,7 +22,7 @@ const findSessionUser = async (session) => {
   ]);
   return user && tenant
     && (user.credentialVersion ?? 0) === (session.credentialVersion ?? 0)
-    && (tenant.accessVersion ?? 0) === (session.tenantAccessVersion ?? 0) ? user : null;
+    && (tenant.accessVersion ?? 0) === (session.tenantAccessVersion ?? 0) ? { user, tenant } : null;
 };
 
 const createSession = async (user, tenant) => {
@@ -49,9 +49,9 @@ const rotateSession = async (previousToken) => {
     $set: { refreshTokenHash: hashToken(refreshToken), expiresAt: nextExpiry(now) },
   }, { new: true });
   if (!session) return null;
-  const user = await findSessionUser(session);
-  if (!user) return null;
-  return { sessionId: String(session._id), refreshToken, user };
+  const current = await findSessionUser(session);
+  if (!current) return null;
+  return { sessionId: String(session._id), refreshToken, user: current.user };
 };
 
 const getSessionUser = async (sessionId, userId, tenantId) => {

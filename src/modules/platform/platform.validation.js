@@ -19,6 +19,12 @@ const context = z.strictObject({
 });
 const status = context.extend({ status: z.enum(['active', 'inactive']) });
 const role = context.extend({ role: z.enum(['admin', 'employee']) });
+const access = context.extend({ access: z.enum(['full', 'read_only', 'suspended']) });
+const billing = context.extend({
+  paidUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Enter the date as YYYY-MM-DD.')
+    .refine((value) => !Number.isNaN(Date.parse(value + 'T00:00:00Z')), 'Enter a real date.').nullable(),
+  billingNote: z.string().trim().max(500).optional(),
+});
 const directionAndQuantity = {
   direction: z.enum(['IN', 'OUT']),
   quantity: z.number().min(0.0001).max(Number.MAX_SAFE_INTEGER),
@@ -46,6 +52,6 @@ const directoryQuery = z.strictObject({
 const pageQuery = directoryQuery.omit({ lookup: true });
 
 module.exports = {
-  readableId, staffIdentity, login, context, status, role, adjustment, bulkStock, recovery,
+  readableId, staffIdentity, login, context, status, role, access, billing, adjustment, bulkStock, recovery,
   finishRecovery, directoryQuery, pageQuery,
 };
