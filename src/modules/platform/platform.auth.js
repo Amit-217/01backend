@@ -3,7 +3,7 @@ const { createHash, randomBytes } = require('node:crypto');
 const { comparePassword } = require('../../common/utils/helpers');
 const { AppError, asyncHandler } = require('../../common/utils/errors');
 const { PlatformStaff, PlatformSession, PlatformAudit } = require('./platform.model');
-const { matchStep, unseal } = require('./platform.totp');
+const { matchStep, requiresTotp, unseal } = require('./platform.totp');
 const { assertNotLocked, recordFailure, clearedLock, unlocked } = require('../../common/utils/loginLock');
 
 const tokenHash = (token) => createHash('sha256').update(token).digest('hex');
@@ -20,16 +20,22 @@ const loginPlatform = async ({ email, password, code }) => {
     throw invalidLogin();
   };
   if (!staff || !await comparePassword(password, staff.passwordHash)) return fail();
-  const step = matchStep(unseal(staff.totpSecret), code);
-  if (step === undefined) return fail();
+  const passwordOnly = !requiresTotp();
+  let step;
+  if (!passwordOnly) {
+    if (!staff.totpSecret || !code) return fail();
+    step = matchStep(unseal(staff.totpSecret), code);
+    if (step === undefined) return fail();
+  }
 
-  const token = randomBytes(32).toString('base64url');
+  const token = (passwordOnly ? 'pwd.' : '') + randomBytes(32).toString('base64url');
   const expiresAt = new Date(Date.now() + 30 * 60_000);
   await mongoose.connection.transaction(async (session) => {
     const verified = await PlatformStaff.updateOne({
-      _id: staff._id, active: true, totpSecret: staff.totpSecret, lastTotpStep: { $lt: step }, ...unlocked(),
-    }, { $set: { lastTotpStep: step, ...clearedLock } }, { session });
-    if (!verified.modifiedCount) {
+      _id: staff._id, active: true, passwordHash: staff.passwordHash, ...unlocked(),
+      ...(passwordOnly ? {} : { totpSecret: staff.totpSecret, lastTotpStep: { $lt: step } }),
+    }, { $set: { ...clearedLock, ...(passwordOnly ? {} : { lastTotpStep: step }) } }, { session });
+    if (!verified.matchedCount) {
       assertNotLocked(await PlatformStaff.findById(staff._id).select('lockedUntil').session(session), lockedMessage);
       throw invalidLogin();
     }
@@ -42,9 +48,10 @@ const loginPlatform = async ({ email, password, code }) => {
 };
 
 const authenticatePlatform = asyncHandler(async (req, _res, next) => {
-  const token = req.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
-  if (!token) throw new AppError(401, 'Platform sign-in is required.');
-  const session = await PlatformSession.findOne({ tokenHash: tokenHash(token), expiresAt: { $gt: new Date() } });
+  // Password-only tokens also differ from the format accepted by older servers.
+  const bearer = req.get('authorization')?.match(/^Bearer ((pwd\.)?[A-Za-z0-9_-]{43})$/);
+  if (!bearer || (bearer[2] && requiresTotp())) throw new AppError(401, 'Platform sign-in is required.');
+  const session = await PlatformSession.findOne({ tokenHash: tokenHash(bearer[1]), expiresAt: { $gt: new Date() } });
   if (!session) throw new AppError(401, 'Platform session expired.');
   const staff = await PlatformStaff.findOne({ _id: session.staffId, active: true });
   if (!staff) throw new AppError(401, 'Platform session expired.');

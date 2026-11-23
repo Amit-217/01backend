@@ -5,6 +5,7 @@ const { AppError, asyncHandler } = require('../../common/utils/errors');
 const { sendSuccess } = require('../../common/utils/response');
 const { PlatformStaff, PlatformSession, PlatformAudit } = require('./platform.model');
 const { loginPlatform, authenticatePlatform } = require('./platform.auth');
+const { requiresTotp } = require('./platform.totp');
 const service = require('./platform.service');
 const { readTeamCapacity } = require('../tenant/users/team-capacity');
 const rules = require('./platform.validation');
@@ -29,6 +30,9 @@ router.use((_req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
+
+router.get('/auth/config', (_req, res) =>
+  sendSuccess(res, 200, 'Platform sign-in settings.', { requiresTotp: requiresTotp() }));
 
 router.post('/auth/login', loginLimit, asyncHandler(async (req, res) => {
   try {

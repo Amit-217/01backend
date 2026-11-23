@@ -11,6 +11,10 @@ Open the web app at `/platform`. The console uses separate named staff accounts.
 
 Generate an encryption key in a trusted terminal with `node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))"` and transfer the output directly to the secret store. The authenticator uses SHA-1, six digits, a 30-second timestep, and one adjacent interval of clock tolerance. [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)
 
+To use password-only sign-in temporarily, set `PLATFORM_REQUIRE_TOTP=false` in the backend and restart it. Run staff enrollment with the same setting. Returning to `true` requires an authenticator again and rejects password-only sessions. Rotate credentials for any staff account enrolled without a setup key.
+
+To provision the first operator in password-only mode, set `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` for the backend and run `node scripts/seed-platform-operator.js` from `Backend/`. The command uses the configured database, skips enrollment if any operator exists, and records a successful enrollment in the platform audit.
+
 ## Investigate and intervene
 
 1. Open the exact company by ID or name. Verify the selected company and the target transaction or user. Use a case reference and a short reason for each action. Use references to link sensitive evidence held in the incident record.

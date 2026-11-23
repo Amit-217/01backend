@@ -8,7 +8,7 @@ const staffSchema = new Schema({
   role: { type: String, enum: ['support', 'operator'], required: true },
   active: { type: Boolean, default: true },
   passwordHash: { type: String, required: true, select: false },
-  totpSecret: { type: String, required: true, select: false },
+  totpSecret: { type: String, select: false },
   lastTotpStep: { type: Number, default: -1, select: false },
   ...lockFields,
 }, { timestamps: true });

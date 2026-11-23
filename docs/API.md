@@ -464,11 +464,12 @@ History returns `{ items, nextCursor }` with optional `productId`, `skuId`, `typ
 
 ## Platform support
 
-All paths below use the `/api/platform` prefix. Sign-in takes `{ email, password, code }` and returns `{ staff, token, expiresAt }`. Use the token as a Bearer credential on platform routes. Both staff roles can read and sign out. The `operator` role can submit the interventions in the second table.
+All paths below use the `/api/platform` prefix. Sign-in takes `{ email, password, code }` and returns `{ staff, token, expiresAt }`. The backend requires `code` by default and allows sign-in with only email and password when `PLATFORM_REQUIRE_TOTP=false`. Use the token as a Bearer credential on platform routes. Both staff roles can read and sign out. The `operator` role can submit the interventions in the second table.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/auth/login` | Staff password and authenticator sign-in |
+| GET | `/auth/config` | Read `{ requiresTotp }` before sign-in |
+| POST | `/auth/login` | Staff sign-in |
 | POST | `/auth/logout` | Revoke the current staff session |
 | GET | `/tenants` | List companies, optionally using `lookup` for exact ID or name |
 | GET | `/audit` | Platform-wide activity outside a selected company |

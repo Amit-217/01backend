@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const { objectId } = require('../raw_material/material_transaction/movement.audit');
+const { requiresTotp } = require('./platform.totp');
 
 const readableId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/, 'Invalid identifier.');
 const staffIdentity = z.strictObject({
@@ -11,8 +12,8 @@ const staffIdentity = z.strictObject({
 const login = z.strictObject({
   email: staffIdentity.shape.email,
   password: staffIdentity.shape.password,
-  code: z.string().regex(/^\d{6}$/, 'Enter a six-digit authenticator code.'),
-});
+  code: z.string().regex(/^\d{6}$/, 'Enter a six-digit authenticator code.').optional(),
+}).refine(({ code }) => !requiresTotp() || !!code, { path: ['code'], message: 'Enter a six-digit authenticator code.' });
 const context = z.strictObject({
   caseReference: z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{1,79}$/, 'Enter a valid support case reference.'),
   reason: z.string().trim().min(5).max(250),

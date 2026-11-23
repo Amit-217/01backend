@@ -6,7 +6,7 @@ const connectDB = require('../src/config/db.config');
 const { hashPassword } = require('../src/common/utils/helpers');
 const { PlatformStaff, PlatformSession, PlatformAudit } = require('../src/modules/platform/platform.model');
 const { staffIdentity } = require('../src/modules/platform/platform.validation');
-const { seal, base32 } = require('../src/modules/platform/platform.totp');
+const { seal, base32, requiresTotp } = require('../src/modules/platform/platform.totp');
 
 async function main() {
   const [command, address, role, ...nameParts] = process.argv.slice(2);
@@ -20,10 +20,10 @@ async function main() {
     email, role, name: nameParts.join(' '), password: process.env.PLATFORM_STAFF_PASSWORD,
   }) : null;
   delete process.env.PLATFORM_STAFF_PASSWORD;
-  const seed = identity ? randomBytes(20) : null;
+  const seed = identity && requiresTotp() ? randomBytes(20) : null;
   const credentials = identity ? {
     email, role: identity.role, name: identity.name, passwordHash: await hashPassword(identity.password),
-    totpSecret: seal(seed), active: true, lastTotpStep: -1,
+    active: true, ...(seed ? { totpSecret: seal(seed), lastTotpStep: -1 } : {}),
   } : null;
 
   await connectDB();
@@ -47,6 +47,8 @@ async function main() {
   if (seed) {
     console.log('Enter this one-time setup key in a TOTP authenticator (SHA-1, 6 digits, 30 seconds):');
     console.log(base32(seed));
+  } else if (provisions) {
+    console.log('Platform staff credentials saved for password-only sign-in.');
   } else {
     console.log('Platform account disabled and sessions revoked.');
   }

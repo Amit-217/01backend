@@ -2,6 +2,7 @@ const {
   createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual,
 } = require('node:crypto');
 const { AppError } = require('../../common/utils/errors');
+const requiresTotp = () => process.env.PLATFORM_REQUIRE_TOTP !== 'false';
 
 const key = () => {
   const value = Buffer.from(process.env.PLATFORM_TOTP_KEY || '', 'base64');
@@ -57,4 +58,4 @@ const base32 = (secret) => {
   return encoded;
 };
 
-module.exports = { seal, unseal, totpCode, matchStep, base32 };
+module.exports = { requiresTotp, seal, unseal, totpCode, matchStep, base32 };
